@@ -108,9 +108,13 @@ class DatabaseManager:
 
         df_to_save = df_to_save[cols_to_keep]
 
+        # 將 DataFrame 轉換為 Python 原生型別 (例如 int, float) 避免 SQLite 無法辨識 NumPy 型別
+        # 將 NaN 或 NaT 轉換為 None 以符合資料庫的 NULL
+        df_to_save = df_to_save.astype(object).where(pd.notnull(df_to_save), None)
+
         with self.get_connection() as conn:
             # 使用 executemany 來插入或取代資料
-            records = df_to_save.to_records(index=False).tolist()
+            records = df_to_save.values.tolist()
             cursor = conn.cursor()
             cursor.executemany('''
                 INSERT OR REPLACE INTO daily_candles (symbol, date, open, high, low, close, volume)

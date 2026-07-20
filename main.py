@@ -27,6 +27,10 @@ def setup_logger():
     )
 
 def main():
+    # 確保程式執行的工作目錄始終是 main.py 所在的資料夾
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(project_root)
+
     parser = argparse.ArgumentParser(description="股市分析系統 - 自動更新工具")
     parser.add_argument('--force', action='store_true', help="強制重新下載所有歷史資料 (預設為增量更新)")
     parser.add_argument('--markets', type=str, default='US,TW,JP,KR', help="要更新的市場 (逗號分隔，如 US,TW)")
