@@ -220,3 +220,63 @@ def check_allocation_drift(
                     fired.append(message)
 
     return fired
+
+
+def _has_reversal_notification_today(database: Path, symbol: str, now: datetime) -> bool:
+    initialize(database)
+    with database_connection(database) as connection:
+        rows = connection.execute(
+            "SELECT triggered_at FROM notification_log WHERE category = 'short_term_reversal' AND symbol = ?",
+            (symbol,),
+        ).fetchall()
+    for row in rows:
+        dt = datetime.fromisoformat(row[0])
+        if dt.date() == now.date():
+            return True
+    return False
+
+
+def check_short_term_reversal_triggers(
+    decision_database: Path,
+    history_database: Path,
+    now: datetime,
+    lookback: int = 5,
+    drop_pct: float = 8.0,
+    notify_os: bool = True,
+) -> list[str]:
+    """Evaluate watchlist items and owned holdings for short-term reversal triggers."""
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+
+    # Local imports to avoid circular/unnecessary imports
+    from transaction_ledger import calculate_holdings
+    from watchlist_repository import list_items
+    from short_term_reversal import calculate_short_term_reversal_for_symbol
+
+    watchlist_symbols = {item.symbol for item in list_items(decision_database)}
+    holding_symbols = {item.symbol for item in calculate_holdings(decision_database) if item.shares > 0}
+    symbols = sorted(watchlist_symbols | holding_symbols)
+
+    fired: list[str] = []
+
+    for symbol in symbols:
+        if _has_reversal_notification_today(decision_database, symbol, now):
+            continue
+
+        triggered = calculate_short_term_reversal_for_symbol(
+            history_database, symbol, lookback=lookback, drop_pct=drop_pct
+        )
+        if triggered:
+            message = f"{symbol} 近{lookback}日跌幅達{drop_pct:g}%以上，符合短期反彈觀察條件"
+            result = record_notification(
+                decision_database,
+                "short_term_reversal",
+                symbol,
+                message,
+                now,
+                notify_os=notify_os,
+            )
+            if result is not None:
+                fired.append(message)
+
+    return fired
