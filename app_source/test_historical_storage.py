@@ -188,7 +188,18 @@ class HistoricalStorageTests(unittest.TestCase):
         self.assertIsNone(average_daily_trading_value(Path("data/test_history_never_created.sqlite"), symbol))
 
     def test_legacy_absolute_archive_can_move_with_database(self) -> None:
-        database = Path("data/test_history.sqlite")
+        database_dir = Path("data/test_legacy_move_isolated")
+        shutil.rmtree(database_dir, ignore_errors=True)
+        database_dir.mkdir(parents=True, exist_ok=True)
+        database = database_dir / "history.sqlite"
+
+        src_archive = Path("data/test_raw_archive")
+        dest_archive = database_dir / "raw_archive"
+        if src_archive.exists():
+            shutil.copytree(src_archive, dest_archive)
+
+        archive_and_import(Path("data/sample_daily_bars.csv"), database, dest_archive)
+
         moved = _resolve_archive_path(
             database,
             "Z:/old-computer/raw_archive/2026/07/"
@@ -197,6 +208,7 @@ class HistoricalStorageTests(unittest.TestCase):
         self.assertEqual(moved.name, "78163eeab33bbb5948a1d98b22d33ac8c679a5d5ed23c9b24bcf67331685d731.csv.gz")
         self.assertTrue(moved.exists())
         self.assertGreaterEqual(make_archive_paths_portable(database), 0)
+        shutil.rmtree(database_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

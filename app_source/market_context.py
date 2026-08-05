@@ -7,7 +7,9 @@ CSV files without changing the analysis logic.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,3 +87,68 @@ def assess_market(snapshot: MarketSnapshot) -> MarketAssessment:
     regime = "bullish" if score >= 65 else "bearish" if score <= 35 else "range_bound"
     risk_level = "high" if score <= 35 else "moderate" if score < 65 else "normal"
     return MarketAssessment(regime, risk_level, round(breadth_ratio, 4), score, tuple(reasons))
+
+
+def market_context_factor_score(database: Path) -> tuple[float | None, str]:
+    """Calculate the market context factor score from TWSE/TPEx indexes and market breadth.
+
+    Args:
+        database (Path): Path to the SQLite database.
+
+    Returns:
+        tuple[float | None, str]: A tuple of (score, note).
+    """
+    if not database.exists():
+        return None, "指數資料不足，尚無法計算大盤情境因子"
+
+    from database_utils import database_connection
+    from market_breadth import compute_market_breadth
+
+    with database_connection(database) as connection:
+        try:
+            twse_rows = connection.execute(
+                "SELECT trading_date, close_value FROM market_index_history WHERE market = 'TWSE' ORDER BY trading_date DESC LIMIT 2"
+            ).fetchall()
+            tpex_rows = connection.execute(
+                "SELECT trading_date, close_value FROM market_index_history WHERE market = 'TPEx' ORDER BY trading_date DESC LIMIT 2"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return None, "指數資料不足，尚無法計算大盤情境因子"
+
+    if len(twse_rows) < 2 or len(tpex_rows) < 2:
+        return None, "指數資料不足，尚無法計算大盤情境因子"
+
+    breadth = compute_market_breadth(database)
+    if breadth is None:
+        return None, "市場廣度資料不足，尚無法計算大盤情境因子"
+
+    universe_size = breadth.advancing + breadth.declining + breadth.unchanged
+    if universe_size <= 0:
+        return None, "市場廣度資料不足，尚無法計算大盤情境因子"
+
+    val_twse_latest, val_twse_prev = twse_rows[0][1], twse_rows[1][1]
+    val_tpex_latest, val_tpex_prev = tpex_rows[0][1], tpex_rows[1][1]
+
+    twse_return_pct = (val_twse_latest - val_twse_prev) / val_twse_prev * 100
+    tpex_return_pct = (val_tpex_latest - val_tpex_prev) / val_tpex_prev * 100
+
+    snapshot = MarketSnapshot(
+        advancers=breadth.advancing,
+        decliners=breadth.declining,
+        new_highs=0,
+        new_lows=0,
+        above_20ma=0,
+        universe_size=universe_size,
+        twse_return_pct=twse_return_pct,
+        tpex_return_pct=tpex_return_pct,
+    )
+
+    assessment = assess_market(snapshot)
+
+    reasons_str = "；".join(assessment.reasons) if assessment.reasons else "無特定異常理由"
+    note = (
+        f"大盤情境：{assessment.regime}（風險等級：{assessment.risk_level}，分數：{assessment.score}）。"
+        f"評估理由：{reasons_str}。"
+        f"（註：創新高/創新低/站上20日均線家數目前無真實資料來源，本次以0計算）"
+    )
+    return float(assessment.score), note
