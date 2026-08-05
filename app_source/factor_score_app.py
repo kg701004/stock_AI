@@ -16,6 +16,7 @@ from factor_score_store import MANUAL_FACTOR_NAMES, SEEDED_NOTE_KEY, load_symbol
 from sentiment_fear import global_risk_factor_score
 from fundamentals_data import fundamentals_factor_score
 from market_breadth import market_breadth_factor_score, sector_rotation_factor_score
+from market_context import market_context_factor_score
 from security_catalog import resolve
 from storage_paths import storage_paths
 from technical_factor import liquidity_factor_score, technical_factor_score
@@ -32,9 +33,9 @@ FACTOR_LABELS = {**MANUAL_FACTOR_LABELS, "technical": "技術面"}
 # Factors with a real local/live data source -- lookup_symbol() overwrites
 # these with a fresh auto-suggestion every time instead of leaving whatever
 # was last saved (the remaining MANUAL_FACTOR_NAMES stay genuinely manual:
-# institutional_flow, derivatives, sentiment have no verified free data
-# source yet). Each entry is a callable taking (history_database, symbol)
-# and returning (score, note); market-wide ones (market_breadth) ignore symbol.
+# institutional_flow, derivatives have no verified free data source yet).
+# Each entry is a callable taking (history_database, symbol) and returning
+# (score, note); market-wide ones (market_breadth, sentiment) ignore symbol.
 AUTO_SUGGESTED_FACTOR_SCORERS = {
     "global_risk": lambda database, symbol: global_risk_factor_score(database),
     "liquidity": liquidity_factor_score,
@@ -43,6 +44,7 @@ AUTO_SUGGESTED_FACTOR_SCORERS = {
     "market_breadth": lambda database, symbol: market_breadth_factor_score(database),
     "sector_rotation": sector_rotation_factor_score,
     "events": lambda database, symbol: events_factor_score(database, symbol),
+    "sentiment": lambda database, symbol: market_context_factor_score(database),
 }
 
 

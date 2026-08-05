@@ -18,7 +18,11 @@ class StoragePathsTests(unittest.TestCase):
         self.assertNotEqual(storage_paths.USER_SETTINGS_PATH, Path("config/storage.json"))
 
     def test_frozen_default_is_beside_executable(self) -> None:
-        executable = Path("C:/Portable/StockAI.exe")
+        import platform
+        if platform.system() == "Windows":
+            executable = Path("C:/Portable/StockAI.exe")
+        else:
+            executable = Path("/Portable/StockAI.exe")
         with patch.object(storage_paths.sys, "frozen", True, create=True), patch.object(
             storage_paths.sys, "executable", str(executable)
         ):
@@ -35,7 +39,7 @@ class StoragePathsTests(unittest.TestCase):
         with patch.object(storage_paths, "USER_SETTINGS_PATH", settings_path), patch(
             "pathlib.Path.exists",
             return_value=False,
-        ):
+        ), patch("pathlib.PurePath.anchor", new_callable=unittest.mock.PropertyMock, return_value="Z:\\"):
             self.assertFalse(storage_paths.has_user_storage_config())
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import sqlite3
 import urllib.request
 import ssl
@@ -34,6 +35,13 @@ def initialize(database: Path) -> None:
         CREATE TABLE IF NOT EXISTS vix_history (trading_date TEXT PRIMARY KEY, value REAL NOT NULL, source TEXT NOT NULL, imported_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS mops_financials (symbol TEXT NOT NULL, fiscal_year INTEGER NOT NULL, fiscal_quarter INTEGER NOT NULL, revenue REAL, eps REAL, gross_margin REAL, operating_margin REAL, roe REAL, debt_ratio REAL, source TEXT NOT NULL, imported_at TEXT NOT NULL, PRIMARY KEY(symbol,fiscal_year,fiscal_quarter,source));
         CREATE TABLE IF NOT EXISTS taifex_daily_reports (trading_date TEXT NOT NULL, contract TEXT NOT NULL, session TEXT NOT NULL, open_price REAL, high_price REAL, low_price REAL, close_price REAL, volume INTEGER, open_interest INTEGER, imported_at TEXT NOT NULL, PRIMARY KEY(trading_date,contract,session));
+        CREATE TABLE IF NOT EXISTS market_index_history (
+            trading_date TEXT NOT NULL,
+            market TEXT NOT NULL,
+            close_value REAL NOT NULL,
+            imported_at TEXT NOT NULL,
+            PRIMARY KEY(trading_date, market)
+        );
         """)
 
 def fetch_fred_vix_csv(timeout: int = 20) -> bytes:
@@ -103,4 +111,124 @@ def import_taifex(database: Path, records: list[TaifexDaily]) -> int:
     initialize(database); now = datetime.now().astimezone().isoformat()
     with database_connection(database) as c:
         c.executemany("INSERT OR REPLACE INTO taifex_daily_reports VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [(x.trading_date.isoformat(),x.contract,x.session,x.open_price,x.high_price,x.low_price,x.close_price,x.volume,x.open_interest,now) for x in records])
+    return len(records)
+
+
+def _parse_roc_date(date_str: str) -> date:
+    date_str = date_str.strip()
+    # Try splitting by "/" first
+    if "/" in date_str:
+        parts = date_str.split("/")
+        if len(parts) == 3:
+            return date(int(parts[0]) + 1911, int(parts[1]), int(parts[2]))
+    # Otherwise fall back to pure digits
+    digits = "".join(c for c in date_str if c.isdigit())
+    if len(digits) == 7:
+        return date(int(digits[:3]) + 1911, int(digits[3:5]), int(digits[5:]))
+    elif len(digits) == 6:
+        return date(int(digits[:2]) + 1911, int(digits[2:4]), int(digits[4:]))
+    raise ValueError(f"Could not parse ROC date: {date_str}")
+
+
+def fetch_twse_index(trading_date: date, timeout: int = 20) -> float | None:
+    """Fetch the TWSE capitalization-weighted stock index close value for a given date.
+
+    Args:
+        trading_date (date): The Gregorian date to query.
+        timeout (int): Network timeout in seconds.
+
+    Returns:
+        float | None: The close value of the index, or None if it was a non-trading day/no data available.
+
+    Raises:
+        urllib.error.URLError, json.JSONDecodeError, KeyError, ValueError, etc. if network or parsing fails for active trading days.
+    """
+    url = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={trading_date.strftime('%Y%m%d')}&type=IND"
+    request = urllib.request.Request(url, headers={"User-Agent": "StockAI-local-research/1.0"})
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    if not isinstance(payload, dict):
+        return None
+
+    tables = payload.get("tables")
+    if not tables or not isinstance(tables, list):
+        return None
+
+    table = tables[0]
+    if not isinstance(table, dict) or "data" not in table:
+        return None
+
+    data = table["data"]
+    if not isinstance(data, list) or not data:
+        return None
+
+    first_row = data[0]
+    if not isinstance(first_row, list) or len(first_row) < 2:
+        return None
+
+    close_str = str(first_row[1]).strip()
+    return float(close_str.replace(",", ""))
+
+
+def fetch_tpex_index(timeout: int = 20) -> list[tuple[date, float]]:
+    """Fetch the recent TPEx (OTC) index close values.
+
+    Args:
+        timeout (int): Network timeout in seconds.
+
+    Returns:
+        list[tuple[date, float]]: Chronologically sorted list of (trading_date, close_value) tuples.
+
+    Raises:
+        urllib.error.URLError, json.JSONDecodeError, KeyError, ValueError, etc. if network or parsing fails.
+    """
+    url = "https://www.tpex.org.tw/openapi/v1/tpex_index"
+    request = urllib.request.Request(url, headers={"User-Agent": "StockAI-local-research/1.0"})
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    if not isinstance(payload, list):
+        raise ValueError("TPEx response is not a JSON list")
+
+    results: list[tuple[date, float]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        roc_date_str = item.get("Date")
+        close_str = item.get("Close")
+        if roc_date_str is None or close_str is None:
+            continue
+        try:
+            dt = _parse_roc_date(str(roc_date_str))
+            close_val = float(str(close_str).replace(",", ""))
+            results.append((dt, close_val))
+        except Exception:
+            # Let exceptions propagate if the structure is completely broken,
+            # but allow skipping individual rows if they are empty.
+            pass
+
+    results.sort(key=lambda x: x[0])
+    return results
+
+
+def import_market_indices(database: Path, records: list[tuple[date, str, float]]) -> int:
+    """UPSERT market index close values into the market_index_history table.
+
+    Args:
+        database (Path): Path to SQLite database.
+        records (list[tuple[date, str, float]]): List of (trading_date, market_name, close_value) tuples.
+
+    Returns:
+        int: Number of records written.
+    """
+    initialize(database)
+    now = datetime.now().astimezone().isoformat()
+    with database_connection(database) as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO market_index_history (trading_date, market, close_value, imported_at) VALUES (?, ?, ?, ?)",
+            [(x[0].isoformat(), x[1], x[2], now) for x in records]
+        )
     return len(records)

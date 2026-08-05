@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Mapping
 
 from database_utils import database_connection
+from market_context import market_context_factor_score
 from technical_factor import technical_factor_score
 from weighted_analysis import AnalysisInput, FACTOR_NAMES
 
@@ -89,6 +90,7 @@ def seed_default_factor_scores(decision_database: Path, history_database: Path, 
         "market_breadth": market_breadth_factor_score(history_database),
         "sector_rotation": sector_rotation_factor_score(history_database, symbol),
         "events": events_factor_score(history_database, symbol, as_of.date()),
+        "sentiment": market_context_factor_score(history_database),
     }.items():
         if score is not None:
             factors[name] = score
