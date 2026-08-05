@@ -82,7 +82,7 @@ def financial_deterioration_score(decision_database: Path, symbol: str) -> tuple
     with database_connection(decision_database) as connection:
         try:
             rows = connection.execute(
-                "SELECT revenue, gross_margin, operating_margin, roe, debt_ratio FROM mops_financials "
+                "SELECT revenue, gross_margin, operating_margin, roe, debt_ratio, source FROM mops_financials "
                 "WHERE symbol = ? ORDER BY fiscal_year, fiscal_quarter",
                 (symbol,),
             ).fetchall()
@@ -94,6 +94,13 @@ def financial_deterioration_score(decision_database: Path, symbol: str) -> tuple
     fields = ("revenue", "gross_margin", "operating_margin", "roe", "debt_ratio")
     labels = {"revenue": "營收", "gross_margin": "毛利率", "operating_margin": "營益率", "roe": "ROE", "debt_ratio": "負債比"}
     score, notes = 0.0, []
+    if previous[-1] != latest[-1]:
+        # Different importers (automated TWSE sync vs. a manually uploaded MOPS
+        # CSV) are not guaranteed to report figures in the same unit (e.g.
+        # revenue in NT$ millions vs. thousands) -- comparing across sources
+        # could silently fabricate a "worsened"/"improved" signal from a pure
+        # unit mismatch. Only compare two periods reported by the same source.
+        return None, (f"前後兩期財報來源不同（{previous[-1]} vs {latest[-1]}），單位可能不一致，暫不比較。",)
     for index, name in enumerate(fields):
         old_value, new_value = previous[index], latest[index]
         if old_value is None or new_value is None:

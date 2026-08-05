@@ -108,6 +108,24 @@ class ShortScreeningTests(unittest.TestCase):
         score, notes = financial_deterioration_score(self.decision_database, "2454")
         self.assertEqual(score, 0.0)
 
+    def test_financial_deterioration_skips_comparison_across_mismatched_sources(self) -> None:
+        # A manually uploaded MOPS CSV and the automated TWSE importer are not
+        # guaranteed to report revenue in the same unit (e.g. NT$ thousands vs
+        # millions) -- comparing across sources must not fabricate a signal.
+        _seed_financials(self.decision_database, "2454", [(2025, 4, 1000.0, 0.40, 0.20, 0.15, 0.30)])
+        connection = sqlite3.connect(self.decision_database)
+        try:
+            connection.execute(
+                "INSERT INTO mops_financials VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, 'MANUAL_CSV', '2026-07-24T00:00:00+08:00')",
+                ("2454", 2026, 1, 800.0, 0.35, 0.15, 0.10, 0.40),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        score, notes = financial_deterioration_score(self.decision_database, "2454")
+        self.assertIsNone(score)
+        self.assertIn("來源不同", notes[0])
+
     def test_margin_trading_signal_is_honestly_unsupported(self) -> None:
         score, notes = margin_trading_signal("2454")
         self.assertIsNone(score)
