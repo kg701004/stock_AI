@@ -127,6 +127,52 @@ class UpdateManagerTests(unittest.TestCase):
         statuses = {item.source: item.status for item in list_statuses(self.database)}
         self.assertEqual(statuses["MARKET_INDEX 大盤櫃買指數"], "失敗")
 
+    def test_startup_check_skips_archive_verification_when_already_verified_today(self) -> None:
+        """Regression test: verify_archive() checksums every file in
+        raw_archive -- confirmed by actually running the app that this had
+        grown to 13,000+ real files after a session of historical
+        backfills, making every single startup take multiple minutes for a
+        check whose whole point is catching rare bit-rot/tampering, not a
+        per-launch necessity. Must only run once per day."""
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
+        with patch("update_manager.verify_archive", return_value=[]) as mock_verify, \
+             patch("update_manager.run_manual_update"), \
+             patch("notification_center.check_short_term_reversal_triggers", return_value=[]), \
+             patch("notification_center.check_allocation_drift", return_value=[]), \
+             patch("update_manager.fetch_twse_index", return_value=None), \
+             patch("update_manager.fetch_tpex_index", return_value=[]):
+            run_startup_check(self.database, self.imports, self.archive, now)
+            self.assertEqual(mock_verify.call_count, 1)
+            statuses = {item.source: item.status for item in list_statuses(self.database)}
+            self.assertEqual(statuses["ARCHIVE 封存完整性驗證"], "成功")
+
+            # A second startup check later the same day must NOT re-scan.
+            run_startup_check(self.database, self.imports, self.archive, now)
+            self.assertEqual(mock_verify.call_count, 1)
+
+    def test_real_archive_corruption_is_never_cached_as_completed(self) -> None:
+        """A real corruption finding must not be silently cached as
+        "already checked today" -- it should keep being re-verified (and
+        re-reported) on every startup until the underlying problem is
+        actually fixed, unlike a clean pass."""
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
+        with patch("update_manager.verify_archive", return_value=["archive/tampered.csv.gz checksum mismatch"]) as mock_verify, \
+             patch("update_manager.run_manual_update", return_value="mocked"), \
+             patch("notification_center.check_short_term_reversal_triggers", return_value=[]), \
+             patch("notification_center.check_allocation_drift", return_value=[]), \
+             patch("update_manager.fetch_twse_index", return_value=None), \
+             patch("update_manager.fetch_tpex_index", return_value=[]):
+            run_startup_check(self.database, self.imports, self.archive, now)
+            statuses = {item.source: item.status for item in list_statuses(self.database)}
+            self.assertEqual(statuses["ARCHIVE 封存完整性驗證"], "失敗")
+            first_call_count = mock_verify.call_count
+            self.assertGreater(first_call_count, 0)
+
+            # A second startup check the same day must still re-verify --
+            # a real failure is never cached as "already checked today".
+            run_startup_check(self.database, self.imports, self.archive, now)
+            self.assertGreater(mock_verify.call_count, first_call_count)
+
     def test_new_startup_check_schedules_and_resilience(self) -> None:
         """Verify that the new REVERSAL and DRIFT checks are called, and a failure in one
         does not prevent the other from completing.

@@ -28,6 +28,7 @@ SCHEDULES = {
     "REVERSAL 短期反彈檢查": "開機時自動執行，每日至多一次",
     "DRIFT 配置偏離檢查": "開機時自動執行，每日至多一次",
     "MARKET_INDEX 大盤櫃買指數": "開機時自動執行，每日至多一次",
+    "ARCHIVE 封存完整性驗證": "開機時自動執行，每日至多一次",
 }
 
 
@@ -159,7 +160,28 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
     # TAIFEX and VIX too); manual_only sources like TAIFEX have no automatic
     # fetcher and are filtered out below rather than duplicating their timing here.
     due=[source for source in due_sources(now, completed) if source.startswith(("TWSE","TPEx","VIX"))]
-    if verify_archive(history_database): result = run_all_public_daily_updates(history_database,imports_directory,archive_directory,decision_database)
+    archive_source = "ARCHIVE 封存完整性驗證"
+    if archive_source in completed:
+        # Already verified clean today -- skip re-hashing every archived file.
+        # verify_archive checksums every .csv.gz in raw_archive; confirmed by
+        # actually running the app that this had grown to 13,000+ real files
+        # after a session of historical backfills, making every single
+        # startup take multiple minutes for a check whose whole point is
+        # catching rare bit-rot/tampering, not a per-launch necessity (the
+        # manual "檢查完整性" button remains available for an on-demand deep
+        # check any time). A real failure is NOT cached this way below --
+        # only a clean pass counts as "completed today", so genuine
+        # corruption keeps getting re-flagged on every launch until fixed.
+        archive_errors: list[str] = []
+    else:
+        archive_errors = verify_archive(history_database)
+        record_status(
+            history_database, archive_source,
+            "成功" if not archive_errors else "失敗",
+            "封存驗證通過" if not archive_errors else f"封存驗證失敗：{'、'.join(archive_errors)}",
+            now,
+        )
+    if archive_errors: result = run_all_public_daily_updates(history_database,imports_directory,archive_directory,decision_database)
     elif not due: result = "歷史資料已通過封存驗證，且未到下一個更新時間；跳過下載。"
     else: result = "；".join(run_manual_update(source,history_database,imports_directory,archive_directory) for source in due)
     gap_source = "GAP 個股缺口補齊"
