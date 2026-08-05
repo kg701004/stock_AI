@@ -12,8 +12,8 @@ from tkinter import messagebox, ttk
 
 import ui_theme
 from dividend_adjustment import events_factor_score
-from external_data_importers import global_risk_factor_score
 from factor_score_store import MANUAL_FACTOR_NAMES, SEEDED_NOTE_KEY, load_symbol_factor_scores, save_factor_scores
+from sentiment_fear import global_risk_factor_score
 from fundamentals_data import fundamentals_factor_score
 from market_breadth import market_breadth_factor_score, sector_rotation_factor_score
 from security_catalog import resolve
