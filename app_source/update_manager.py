@@ -12,7 +12,7 @@ from historical_storage import archive_and_import
 from historical_storage import verify_archive
 from tpex_daily_importer import fetch_current_daily_json as fetch_tpex, parse_daily_records as parse_tpex, extract_security_names as extract_tpex_names
 from twse_daily_importer import fetch_current_daily_json as fetch_twse, parse_daily_records as parse_twse, write_normalized_csv, extract_security_names as extract_twse_names
-from external_data_importers import fetch_fred_vix_csv, import_vix, parse_fred_vix_csv
+from external_data_importers import fetch_fred_vix_csv, fetch_tpex_index, fetch_twse_index, import_market_indices, import_vix, parse_fred_vix_csv
 import security_catalog
 from dividend_adjustment import fetch_ex_rights_events, parse_ex_rights_events, store_events
 from fundamentals_data import update_revenue_snapshots
@@ -134,6 +134,25 @@ def run_all_public_daily_updates(history_database: Path, imports_directory: Path
             try:
                 from notification_center import record_notification
                 record_notification(decision_database, "ex_rights_fetch_failed", "", f"除權息事件更新失敗（{type(error).__name__}）；除權息還原可能使用過期資料。", datetime.now().astimezone())
+            except Exception:
+                pass
+    try:
+        # market_context_factor_score (the "sentiment" auto factor) reads
+        # market_index_history -- without this call nothing ever populates
+        # that table, so the factor silently stays at the neutral 50
+        # fallback forever (confirmed by actually running the app: the
+        # fetch/store functions existed but were never wired to run).
+        today = datetime.now(ZoneInfo("Asia/Taipei")).date()
+        twse_close = fetch_twse_index(today)
+        records = [(today, "TWSE", twse_close)] if twse_close is not None else []
+        records.extend((d, "TPEx", close) for d, close in fetch_tpex_index())
+        if records:
+            import_market_indices(history_database, records)
+    except Exception as error:
+        if decision_database is not None:
+            try:
+                from notification_center import record_notification
+                record_notification(decision_database, "market_index_fetch_failed", "", f"大盤/櫃買指數更新失敗（{type(error).__name__}）；大盤情境因子可能使用過期或不足資料。", datetime.now().astimezone())
             except Exception:
                 pass
     try:
