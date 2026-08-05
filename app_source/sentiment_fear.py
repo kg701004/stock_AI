@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from database_utils import database_connection
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,3 +106,48 @@ def build_sentiment_factors(sentiment: SentimentInputs, fear: FearInputs) -> tup
     """Return factor values/notes ready for ``AnalysisInput`` or factor-score CSV."""
     sentiment_result, fear_result = score_sentiment(sentiment), score_fear(fear)
     return ({"sentiment": sentiment_result.score, "global_risk": fear_result.score}, {"sentiment": "；".join(sentiment_result.reasons), "global_risk": "；".join(fear_result.reasons)})
+
+
+def global_risk_factor_score(database: Path) -> tuple[float | None, str]:
+    """Calculate the global risk factor score using VIX historical percentile and 5-day change."""
+    if not database.exists():
+        return None, "VIX資料不足，尚無法計算全球風險因子"
+    try:
+        with database_connection(database) as c:
+            rows = c.execute(
+                "SELECT value FROM vix_history ORDER BY trading_date DESC LIMIT 90"
+            ).fetchall()
+    except Exception:
+        return None, "VIX資料不足，尚無法計算全球風險因子"
+
+    if len(rows) < 6:
+        return None, "VIX資料不足，尚無法計算全球風險因子"
+
+    values = [r[0] for r in rows]
+    latest_vix = values[0]
+    vix_5d_ago = values[5]
+
+    if vix_5d_ago <= 0:
+        vix_5d_change_pct = 0.0
+    else:
+        vix_5d_change_pct = ((latest_vix - vix_5d_ago) / vix_5d_ago) * 100
+
+    less = sum(1 for v in values if v < latest_vix)
+    equal = sum(1 for v in values if v == latest_vix)
+    if len(values) > 1:
+        vix_percentile = (less + (equal - 1) * 0.5) / (len(values) - 1) * 100
+    else:
+        vix_percentile = 100.0
+
+    try:
+        inputs = FearInputs(
+            vix_value=latest_vix,
+            vix_percentile=vix_percentile,
+            vix_5d_change_pct=vix_5d_change_pct,
+            taiwan_night_return_pct=None,
+            taiwan_put_call_ratio=None,
+        )
+        result = score_fear(inputs)
+        return result.score, "；".join(result.reasons)
+    except Exception:
+        return None, "VIX資料不足，尚無法計算全球風險因子"

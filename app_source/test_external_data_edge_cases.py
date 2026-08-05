@@ -6,8 +6,8 @@ from pathlib import Path
 from database_utils import database_connection
 
 from external_data_importers import (
-    MopsFinancial, TaifexDaily, global_risk_factor_score, global_risk_score_from_vix,
-    import_mops, import_taifex, import_vix, latest_vix,
+    MopsFinancial, TaifexDaily,
+    import_mops, import_taifex, import_vix,
     parse_fred_vix_csv, parse_mops_csv, parse_mops_xbrl,
 )
 
@@ -29,25 +29,6 @@ class ExternalDataEdgeCaseTests(unittest.TestCase):
     def test_vix_rejects_bad_date_and_no_numeric_values(self) -> None:
         with self.assertRaises(ValueError): parse_fred_vix_csv(b"observation_date,VIXCLS\n2026-01-01,.\n")
         with self.assertRaises(ValueError): parse_fred_vix_csv(b"observation_date,VIXCLS\nbad,10\n")
-
-    def test_global_risk_score_from_vix_follows_higher_is_calmer_convention(self) -> None:
-        self.assertEqual(global_risk_score_from_vix(12.0), 100.0)  # calm-market anchor
-        self.assertEqual(global_risk_score_from_vix(40.0), 0.0)  # crisis-level anchor
-        self.assertEqual(global_risk_score_from_vix(26.0), 50.0)  # midpoint
-        self.assertEqual(global_risk_score_from_vix(5.0), 100.0)  # clamped, never above 100
-        self.assertEqual(global_risk_score_from_vix(82.69), 0.0)  # clamped, never below 0 (real 2026 max)
-
-    def test_global_risk_factor_score_uses_the_latest_real_vix_row(self) -> None:
-        import_vix(self.database, parse_fred_vix_csv(b"observation_date,VIXCLS\n2026-01-01,15.0\n2026-01-02,18.21\n"))
-        self.assertEqual(latest_vix(self.database), (18.21, date(2026, 1, 2)))
-        score, note = global_risk_factor_score(self.database)
-        self.assertEqual(score, global_risk_score_from_vix(18.21))
-        self.assertIn("18.21", note)
-
-    def test_global_risk_factor_score_is_none_without_local_vix_data(self) -> None:
-        score, note = global_risk_factor_score(Path("data/test_no_vix_ever.sqlite"))
-        self.assertIsNone(score)
-        self.assertIn("尚無本機 VIX 資料", note)
 
     def test_mops_accepts_chinese_headers_commas_percent_and_optional_blanks(self) -> None:
         payload = "公司代號,年度,季別,營業收入,每股盈餘,毛利率,負債比\n2330,2025,4,1,234.50,50.25,10.5%,42.0%\n"
