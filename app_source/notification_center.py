@@ -112,3 +112,106 @@ def check_watchlist_triggers(decision_database: Path, now: datetime, notify_os: 
         if result is not None:
             fired.append(f"{item.symbol} {item.name}：{message}")
     return fired
+
+
+def _has_drift_notification_today(database: Path, symbol: str, now: datetime) -> bool:
+    initialize(database)
+    with database_connection(database) as connection:
+        rows = connection.execute(
+            "SELECT triggered_at FROM notification_log WHERE category = 'allocation_drift' AND symbol = ?",
+            (symbol,),
+        ).fetchall()
+    for row in rows:
+        dt = datetime.fromisoformat(row[0])
+        if dt.date() == now.date():
+            return True
+    return False
+
+
+def check_allocation_drift(
+    decision_database: Path,
+    history_database: Path,
+    threshold_pct: float = 5.0,
+    now: datetime | None = None,
+    notify_os: bool = True,
+) -> list[str]:
+    """Evaluate owner portfolios for weight drift and log notifications if they exceed the threshold."""
+    if now is None:
+        now = datetime.now().astimezone()
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+
+    # Local imports to avoid circular dependencies
+    from transaction_ledger import calculate_holdings
+    from portfolio_preferences import get_cash_balance
+    from weighted_analysis import assess_stock, load_weight_config
+    from factor_score_store import load_all_current_assessments
+    from watchlist_repository import list_items
+    from security_catalog import load_security_metadata
+    from portfolio_allocation import build_allocation_plan, load_allocation_rules
+
+    # Ensure config files can be found
+    config_path = Path("config/analysis_weights.json")
+    if not config_path.exists():
+        config_path = Path(__file__).parent / "config" / "analysis_weights.json"
+
+    rules_path = Path("config/allocation_rules.json")
+    if not rules_path.exists():
+        rules_path = Path(__file__).parent / "config" / "allocation_rules.json"
+
+    ledger = calculate_holdings(decision_database)
+    owners = sorted({item.owner for item in ledger if item.market_value is not None})
+    if not owners:
+        return []
+
+    weight_config = load_weight_config(config_path)
+    scores = {
+        symbol: assess_stock(row, weight_config).final_score
+        for symbol, row in load_all_current_assessments(decision_database, history_database).items()
+    }
+    watchlist_symbols = [item.symbol for item in list_items(decision_database)]
+    rules = load_allocation_rules(rules_path)
+
+    fired: list[str] = []
+
+    for owner in owners:
+        cash_balance = get_cash_balance(decision_database, owner)
+        plan = build_allocation_plan(
+            owner,
+            ledger,
+            scores,
+            load_security_metadata(history_database, symbols={item.symbol for item in ledger} | set(watchlist_symbols)),
+            rules,
+            watchlist_symbols,
+            cash_balance=cash_balance,
+        )
+
+        # Only check actually owned symbols (shares > 0 and market_value is not None)
+        owned_symbols = {
+            item.symbol for item in ledger
+            if item.owner == owner and item.shares > 0 and item.market_value is not None
+        }
+
+        for suggestion in plan.suggestions:
+            if suggestion.symbol not in owned_symbols:
+                continue
+
+            drift = abs(suggestion.current_weight_pct - suggestion.target_weight_pct)
+            if drift > threshold_pct:
+                # Deduplication: check if already notified today
+                if _has_drift_notification_today(decision_database, suggestion.symbol, now):
+                    continue
+
+                message = f"{suggestion.symbol} 目前權重 {suggestion.current_weight_pct:.1f}% 偏離目標 {suggestion.target_weight_pct:.1f}% 超過 {threshold_pct}%"
+                result = record_notification(
+                    decision_database,
+                    "allocation_drift",
+                    suggestion.symbol,
+                    message,
+                    now,
+                    notify_os=notify_os,
+                )
+                if result is not None:
+                    fired.append(message)
+
+    return fired
