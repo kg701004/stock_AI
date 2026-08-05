@@ -10,6 +10,13 @@ except Exception: tk = None
 
 @unittest.skipIf(tk is None, "Tk is unavailable")
 class GuiSmokeTests(unittest.TestCase):
+    def _get_tab(self, notebook, class_name):
+        for tab in notebook.tabs():
+            widget = notebook.nametowidget(tab)
+            if widget.__class__.__name__ == class_name:
+                return widget
+        raise ValueError(f"Tab of class {class_name} not found")
+
     def test_dashboard_constructs_all_tabs(self):
         base = Path("data/test_gui_storage"); base.mkdir(parents=True, exist_ok=True)
         paths = {"history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
@@ -18,7 +25,7 @@ class GuiSmokeTests(unittest.TestCase):
             try:
                 app = StockAiApp(root); root.update_idletasks()
                 notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
-                self.assertEqual(len(notebook.tabs()), 10)
+                self.assertEqual(len(notebook.tabs()), 11)
                 for tab in notebook.tabs(): notebook.select(tab); root.update_idletasks()
             finally:
                 root.destroy()
@@ -52,19 +59,18 @@ class GuiSmokeTests(unittest.TestCase):
             try:
                 app = StockAiApp(root); root.update_idletasks()
                 notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
-                tabs = notebook.tabs()
-                watchlist_frame = notebook.nametowidget(tabs[1])
-                score_frame = notebook.nametowidget(tabs[3])
+                watchlist_frame = self._get_tab(notebook, "WatchlistApp")
+                score_frame = self._get_tab(notebook, "FactorScoreApp")
 
-                notebook.select(tabs[1]); root.update()
+                notebook.select(watchlist_frame); root.update()
                 before = watchlist_frame.table.item(watchlist_frame.table.get_children()[0])["values"]
                 self.assertEqual(before[7], "—")
 
-                notebook.select(tabs[3]); root.update()
+                notebook.select(score_frame); root.update()
                 score_frame.query.delete(0, "end"); score_frame.query.insert(0, "6182")
                 score_frame.lookup_symbol(); score_frame.save()
 
-                notebook.select(tabs[1]); root.update()
+                notebook.select(watchlist_frame); root.update()
                 after = watchlist_frame.table.item(watchlist_frame.table.get_children()[0])["values"]
                 self.assertNotEqual(after[7], "—")
             finally:
@@ -93,7 +99,7 @@ class GuiSmokeTests(unittest.TestCase):
             try:
                 app = StockAiApp(root); root.update_idletasks()
                 notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
-                chart_frame = notebook.nametowidget(notebook.tabs()[4])
+                chart_frame = self._get_tab(notebook, "PriceChartFrame")
 
                 chart_frame.symbol_entry.insert(0, "2330")
                 chart_frame.window_choice.set("近30天")
@@ -128,7 +134,7 @@ class GuiSmokeTests(unittest.TestCase):
             try:
                 app = StockAiApp(root); root.update_idletasks()
                 notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
-                data_frame = notebook.nametowidget(notebook.tabs()[7])
+                data_frame = self._get_tab(notebook, "DataManagementFrame")
 
                 data_frame.backfill_symbols.delete(0, "end")
                 data_frame.backfill_symbols.insert(0, "9999")  # stale leftover text from an unrelated lookup
@@ -178,7 +184,7 @@ class GuiSmokeTests(unittest.TestCase):
             try:
                 app = StockAiApp(root); root.update_idletasks()
                 notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
-                data_frame = notebook.nametowidget(notebook.tabs()[7])
+                data_frame = self._get_tab(notebook, "DataManagementFrame")
                 data_frame._pending_backfill = [("AAAA", 2026, 1), ("AAAA", 2026, 2), ("BBBB", 2026, 1)]
                 data_frame.after = lambda _delay, fn: fn()  # run scheduled callbacks immediately, not via Tk's queue
 
@@ -221,7 +227,7 @@ class GuiSmokeTests(unittest.TestCase):
             try:
                 app = StockAiApp(root); root.update_idletasks()
                 notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
-                data_frame = notebook.nametowidget(notebook.tabs()[7])
+                data_frame = self._get_tab(notebook, "DataManagementFrame")
                 data_frame.backfill_years.delete(0, "end"); data_frame.backfill_years.insert(0, "1")
 
                 data_frame.estimate_backfill_all_tracked()
@@ -316,7 +322,7 @@ class GuiSmokeTests(unittest.TestCase):
             try:
                 app = StockAiApp(root); root.update_idletasks()
                 notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
-                data_frame = notebook.nametowidget(notebook.tabs()[7])
+                data_frame = self._get_tab(notebook, "DataManagementFrame")
 
                 data_frame.estimate_backfill_all_symbols()
 
@@ -348,12 +354,83 @@ class GuiSmokeTests(unittest.TestCase):
             try:
                 app = StockAiApp(root); root.update_idletasks()
                 notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
-                data_frame = notebook.nametowidget(notebook.tabs()[7])
+                data_frame = self._get_tab(notebook, "DataManagementFrame")
 
                 data_frame._integrity_worker(None)  # run synchronously in-thread for a deterministic test
                 root.update()  # self.after(0, ...) callbacks only run via update(), not update_idletasks()
 
                 self.assertIn("已檢查 1", data_frame.integrity_status["text"])
                 self.assertIn("無錯誤", data_frame.integrity_status["text"])
+            finally:
+                root.destroy()
+
+    def test_position_advice_tab_shows_advice_and_skips_missing(self):
+        """📋 個股建議 tab must successfully display advice for scored holdings
+        and skip unscored holdings without crashing."""
+        from historical_storage import DailyBar, archive_and_import
+        from security_catalog import upsert_from_daily_snapshot
+        from twse_daily_importer import write_normalized_csv
+        from transaction_ledger import add_transaction, set_current_price, Transaction
+        from factor_score_store import save_factor_scores
+
+        base = Path("data/test_gui_position_advice"); base.mkdir(parents=True, exist_ok=True)
+        paths = {"history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
+        paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
+
+        # Seed two stocks: 2330 and 2303.
+        # 2330 will have both scores and holdings.
+        # 2303 will have holdings but NO scores.
+        upsert_from_daily_snapshot(paths["history_database"], [("2330", "台積電"), ("2303", "聯電")], "TWSE", "2026-07-30T00:00:00")
+
+        # Add transactions to ledger (buy shares > 0)
+        now = datetime(2026, 7, 24, tzinfo=timezone.utc)
+        add_transaction(paths["decision_database"], Transaction(None, "Will", "2330", now, "BUY", 1000, 500.0, 100.0, "Initial"))
+        add_transaction(paths["decision_database"], Transaction(None, "Will", "2303", now, "BUY", 1000, 50.0, 10.0, "Initial"))
+
+        # Set current prices
+        set_current_price(paths["decision_database"], "2330", 550.0, now)
+        set_current_price(paths["decision_database"], "2303", 55.0, now)
+
+        # Seed factor scores ONLY for 2330, NOT 2303
+        from weighted_analysis import FACTOR_NAMES
+        factors_2330 = {name: 95.0 for name in FACTOR_NAMES if name != "technical"}
+        save_factor_scores(paths["decision_database"], "2330", now, factors_2330, 20.0, {"_note": "Test 2330"})
+
+        with patch("stock_ai_app.storage_paths", return_value=paths), \
+             patch("holdings_manager.storage_paths", return_value=paths), \
+             patch("watchlist_app.storage_paths", return_value=paths), \
+             patch("factor_score_app.storage_paths", return_value=paths):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = StockAiApp(root); root.update_idletasks()
+                notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
+
+                # Retrieve the position advice frame
+                advice_frame = self._get_tab(notebook, "PositionAdviceFrame")
+                advice_frame.refresh()
+                root.update()
+
+                # Verify 2330 was successfully analyzed and inserted in treeview
+                children = advice_frame.table.get_children()
+                self.assertEqual(len(children), 1)  # only 2330 because 2303 lacks scores and is skipped
+
+                # Verify 2330's values
+                values = advice_frame.table.item(children[0])["values"]
+                self.assertEqual(str(values[0]), "2330") # Symbol
+                self.assertIn("加碼觀察", values[1]) # Action
+
+                # Check on_select details population
+                advice_frame.table.selection_set(children[0])
+                advice_frame.on_select(None)
+                root.update()
+
+                details_content = advice_frame.details.get("1.0", "end")
+                self.assertIn("總分", details_content)
+
+                # Check warnings box contains skipped 2303
+                warnings_content = advice_frame.warnings.get("1.0", "end")
+                self.assertIn("2303", warnings_content)
+                self.assertIn("無評分資料", warnings_content)
+
             finally:
                 root.destroy()

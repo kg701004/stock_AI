@@ -15,7 +15,7 @@ from historical_coverage import check_coverage
 from historical_storage import archive_and_import
 from factor_score_app import FactorScoreApp
 from factor_score_store import load_all_current_assessments
-from portfolio import Position, load_positions_csv
+from portfolio import Position, load_positions_csv, advise_position, persist_position_advice, load_position_rules
 from portfolio_allocation import build_allocation_plan, load_allocation_rules
 from portfolio_preferences import get_cash_balance, set_cash_balance
 from portfolio_risk import assess_owner_portfolio, load_risk_rules
@@ -485,6 +485,216 @@ class AllocationFrame(ttk.Frame):
         self.warnings.configure(state="normal"); self.warnings.delete("1.0", "end"); self.warnings.insert("1.0", "\n".join(f"- {x}" for x in plan.warnings) or "配置依已登錄持股、現金餘額、個股與產業上限計算。" ); self.warnings.configure(state="disabled")
 
 
+class PositionAdviceFrame(ttk.Frame):
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master, padding=12)
+        controls = ttk.Frame(self)
+        controls.pack(fill="x")
+
+        ttk.Label(controls, text="持有人").pack(side="left")
+        self.owner = ttk.Combobox(controls, state="readonly", width=20)
+        self.owner.pack(side="left", padx=(0, 8))
+        self.owner.bind("<<ComboboxSelected>>", self.owner_selected)
+
+        ttk.Button(controls, text="更新個股建議", command=self.refresh).pack(side="left", padx=(8, 0))
+
+        self.summary = ttk.Label(self, font=("Microsoft JhengHei UI", 11, "bold"))
+        self.summary.pack(anchor="w", pady=(10, 4))
+
+        columns = ("symbol", "action", "assessment_score", "market_value", "unrealized_profit_pct", "classification")
+        self.table = ttk.Treeview(self, columns=columns, show="headings", height=10)
+
+        for key, label in zip(columns, ("股票代號", "建議", "綜合分數", "市值", "未實現損益率", "分類")):
+            self.table.heading(key, text=label)
+            self.table.column(key, width=125, anchor="center")
+
+        self.table.tag_configure("gain", foreground=ui_theme.GAIN)
+        self.table.tag_configure("loss", foreground=ui_theme.LOSS)
+        self.table.tag_configure("neutral", foreground=ui_theme.NEUTRAL)
+        self.table.pack(fill="both", expand=True)
+        self.table.bind("<<TreeviewSelect>>", self.on_select)
+
+        # Bottom details & warnings
+        details_frame = ttk.Frame(self)
+        details_frame.pack(fill="x", pady=(8, 0))
+
+        # Details text
+        detail_panel = ttk.Frame(details_frame)
+        detail_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        ttk.Label(detail_panel, text="完整理由與觸發條件", font=("Microsoft JhengHei UI", 10, "bold")).pack(anchor="w", pady=(0, 2))
+        self.details = tk.Text(detail_panel, height=6, wrap="word", state="disabled", background=ui_theme.SURFACE, relief="flat", borderwidth=1, highlightbackground=ui_theme.BORDER, highlightthickness=1)
+        self.details.pack(fill="both", expand=True)
+        self.details.tag_configure("header", font=("Microsoft JhengHei UI", 9, "bold"))
+
+        # Warnings text
+        warning_panel = ttk.Frame(details_frame)
+        warning_panel.grid(row=0, column=1, sticky="nsew")
+        ttk.Label(warning_panel, text="提示與警告訊息", font=("Microsoft JhengHei UI", 10, "bold")).pack(anchor="w", pady=(0, 2))
+        self.warnings = tk.Text(warning_panel, height=6, wrap="word", state="disabled", background=ui_theme.SURFACE, relief="flat", borderwidth=1, highlightbackground=ui_theme.BORDER, highlightthickness=1)
+        self.warnings.pack(fill="both", expand=True)
+        self.warnings.tag_configure("warning_header", foreground=ui_theme.WARNING, font=("Microsoft JhengHei UI", 9, "bold"))
+        self.warnings.tag_configure("success", foreground=ui_theme.SUCCESS)
+
+        details_frame.columnconfigure(0, weight=1)
+        details_frame.columnconfigure(1, weight=1)
+
+        self.advices = {}
+        self.refresh()
+
+    def owner_selected(self, _event: object) -> None:
+        self.refresh()
+
+    def on_select(self, event: object) -> None:
+        selected = self.table.selection()
+        if not selected:
+            return
+        item_id = selected[0]
+        values = self.table.item(item_id, "values")
+        if not values:
+            return
+        symbol = values[0]
+        advice = self.advices.get(symbol)
+
+        self.details.configure(state="normal")
+        self.details.delete("1.0", "end")
+        if advice:
+            self.details.insert("end", "【觸發條件】\n", "header")
+            for cond in advice.triggered_conditions:
+                self.details.insert("end", f"· {cond}\n")
+            self.details.insert("end", "\n【建議理由與備註】\n", "header")
+            for reason in advice.reasons:
+                self.details.insert("end", f"· {reason}\n")
+        self.details.configure(state="disabled")
+
+    def refresh(self) -> None:
+        database = storage_paths()["decision_database"]
+        history_database = storage_paths()["history_database"]
+        ledger = calculate_holdings(database)
+        owners = sorted({item.owner for item in ledger if item.shares > 0})
+        self.owner["values"] = owners
+        if owners and self.owner.get() not in owners:
+            self.owner.set(owners[0])
+
+        self.table.delete(*self.table.get_children())
+        self.advices.clear()
+
+        self.details.configure(state="normal")
+        self.details.delete("1.0", "end")
+        self.details.configure(state="disabled")
+
+        self.warnings.configure(state="normal")
+        self.warnings.delete("1.0", "end")
+
+        if not owners:
+            self.summary.configure(text="無實際持股資料。")
+            self.warnings.insert("end", "請先新增交易並確認持有股數大於 0。")
+            self.warnings.configure(state="disabled")
+            return
+
+        owner = self.owner.get()
+        holdings = [item for item in ledger if item.owner == owner and item.shares > 0]
+
+        if not holdings:
+            self.summary.configure(text=f"持有人 {owner} 無實際持股。")
+            self.warnings.configure(state="disabled")
+            return
+
+        try:
+            rules = load_position_rules(Path("config/position_rules.json"))
+            weight_config = load_weight_config(Path("config/analysis_weights.json"))
+            current_assessments = load_all_current_assessments(database, history_database)
+        except Exception as error:
+            self.summary.configure(text="載入設定檔或評分失敗")
+            self.warnings.insert("end", f"⚠️ 錯誤：{error}\n")
+            self.warnings.configure(state="disabled")
+            return
+
+        skipped_symbols = []
+        action_counts = {"加碼觀察": 0, "減碼／風險控管": 0, "續抱觀察": 0}
+
+        for item in holdings:
+            row = current_assessments.get(item.symbol)
+            if row is None:
+                skipped_symbols.append(f"{item.symbol} (無評分資料)")
+                continue
+
+            if item.average_cost <= 0 or item.current_price is None or item.current_price <= 0:
+                skipped_symbols.append(f"{item.symbol} (均價或現價異常)")
+                continue
+
+            try:
+                pos = Position(
+                    owner=item.owner,
+                    symbol=item.symbol,
+                    shares=item.shares,
+                    average_cost=item.average_cost,
+                    current_price=item.current_price,
+                    as_of=datetime.now().astimezone()
+                )
+
+                assessment = assess_stock(row, weight_config)
+                risk_score = row.risk_score
+
+                advice = advise_position(pos, assessment, risk_score, rules)
+                self.advices[item.symbol] = advice
+
+                # Persist advice (audit log)
+                persist_position_advice(database, advice, datetime.now().astimezone(), str(rules.get("version", "unknown")))
+
+                action_tags = {
+                    "加碼觀察": "gain",
+                    "減碼／風險控管": "loss",
+                    "續抱觀察": "neutral"
+                }
+                tag = action_tags.get(advice.action, "neutral")
+
+                mval_str = f"{advice.metrics.market_value:,.2f}"
+                pct_str = f"{advice.metrics.unrealized_profit_pct:.2f}%"
+                score_str = f"{advice.assessment_score:.2f}"
+
+                classification_mapping = {
+                    "strong_watch": "強烈觀望 (Strong)",
+                    "bullish_watch": "偏多觀望 (Bullish)",
+                    "neutral": "中性 (Neutral)",
+                    "high_risk": "高風險 (High Risk)",
+                    "weak": "偏弱 (Weak)"
+                }
+                class_str = classification_mapping.get(advice.assessment_classification, advice.assessment_classification)
+
+                self.table.insert("", "end", tags=(tag,), values=(
+                    advice.symbol,
+                    advice.action,
+                    score_str,
+                    mval_str,
+                    pct_str,
+                    class_str
+                ))
+
+                if advice.action in action_counts:
+                    action_counts[advice.action] += 1
+
+            except Exception as e:
+                skipped_symbols.append(f"{item.symbol} (計算錯誤: {e})")
+
+        sum_parts = []
+        for act, cnt in action_counts.items():
+            if cnt > 0:
+                sum_parts.append(f"{act} {cnt} 檔")
+        summary_text = f"持股建議總覽：{owner} 共 {len(holdings)} 檔持股，已分析 {len(self.advices)} 檔"
+        if sum_parts:
+            summary_text += f" ({'、'.join(sum_parts)})"
+        self.summary.configure(text=summary_text)
+
+        if skipped_symbols:
+            self.warnings.insert("end", "⚠️ 以下持股因無評分資料或資料異常，已略過建議：\n", "warning_header")
+            for sym in skipped_symbols:
+                self.warnings.insert("end", f"· {sym}\n")
+        else:
+            self.warnings.insert("end", "✅ 所有持股評分與建議載入正常。\n", "success")
+
+        self.warnings.configure(state="disabled")
+
+
 class HedgeAdviceFrame(ttk.Frame):
     """Suggest an index-futures contract count to move the portfolio to a target Beta. Advisory only -- never places an order."""
     def __init__(self, master: tk.Misc) -> None:
@@ -718,7 +928,7 @@ class StockAiApp(ttk.Frame):
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master); master.title("Stock AI 台股分析工具"); self.pack(fill="both", expand=True); notebook = ttk.Notebook(self); notebook.pack(fill="both", expand=True)
         self.data_management_frame = DataManagementFrame(notebook)
-        for frame, title in ((HoldingsManager(notebook), "📊 持股管理"), (WatchlistApp(notebook), "⭐ 自選追蹤"), (PortfolioDecisionFrame(notebook), "🛡 組合風險與配置"), (FactorScoreApp(notebook), "📝 個股評分輸入"), (PriceChartFrame(notebook), "📈 個股線圖"), (ShortScreeningApp(notebook), "📉 放空篩選（實驗性）"), (BacktestApp(notebook), "🧪 技術面回測驗證"), (self.data_management_frame, "🗄 資料管理"), (JudgementWeightFrame(notebook), "⚖ 判斷機制權重"), (NotificationCenterFrame(notebook), "🔔 通知中心")): notebook.add(frame, text=title)
+        for frame, title in ((HoldingsManager(notebook), "📊 持股管理"), (WatchlistApp(notebook), "⭐ 自選追蹤"), (PortfolioDecisionFrame(notebook), "🛡 組合風險與配置"), (PositionAdviceFrame(notebook), "📋 個股建議"), (FactorScoreApp(notebook), "📝 個股評分輸入"), (PriceChartFrame(notebook), "📈 個股線圖"), (ShortScreeningApp(notebook), "📉 放空篩選（實驗性）"), (BacktestApp(notebook), "🧪 技術面回測驗證"), (self.data_management_frame, "🗄 資料管理"), (JudgementWeightFrame(notebook), "⚖ 判斷機制權重"), (NotificationCenterFrame(notebook), "🔔 通知中心")): notebook.add(frame, text=title)
         _refresh_active_tab_on_change(notebook)
 
     def run_startup_checks_in_background(self) -> None:
