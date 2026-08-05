@@ -97,8 +97,15 @@ def assess_owner_portfolio(owner: str, positions: list[Position], metadata: Mapp
     for symbol, value in market_values.items():
         info = metadata.get(symbol)
         if info is None:
-            warnings.append(f"{symbol} 缺少產業與 Beta 資料，無法完整評估曝險。")
+            warnings.append(f"{symbol} 缺少產業與 Beta 資料，無法完整評估曝險；Beta 以市場平均值 1.0 估算。")
             sector_values["未分類"] += value
+            # A missing beta must NOT be treated as 0 (zero market correlation) --
+            # that silently understates portfolio_beta, which feeds directly into
+            # beta_hedge.suggest_hedge()'s futures-contract sizing and would cause
+            # an under-hedged "hedged" portfolio. Default to the market-average
+            # beta of 1.0 instead, matching portfolio_advanced_risk.py's stress
+            # test so the two risk screens agree on how to handle missing data.
+            weighted_beta += value / total * 1.0
             continue
         sector_values[info.sector] += value
         weighted_beta += value / total * info.beta

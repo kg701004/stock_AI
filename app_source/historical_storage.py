@@ -19,6 +19,32 @@ from pathlib import Path
 
 from database_utils import database_connection
 
+# The single canonical daily_bars schema. Previously latest_close_price() and
+# average_daily_trading_value() each had their own truncated "CREATE TABLE IF
+# NOT EXISTS daily_bars (...)" with fewer columns -- since IF NOT EXISTS is a
+# no-op once ANY of the three has created the table, whichever of these ran
+# first (e.g. opening the 持股 or 自選 tab before ever running a backfill)
+# would permanently leave the truncated schema in place, and every later
+# archive_and_import() insert (which needs the full column set) would fail.
+# All three call sites now share this exact statement so it doesn't matter
+# which one runs first.
+_DAILY_BARS_SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS imports (
+        checksum TEXT PRIMARY KEY, original_name TEXT NOT NULL, archive_path TEXT NOT NULL,
+        imported_at TEXT NOT NULL, row_count INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS daily_bars (
+        symbol TEXT NOT NULL, trading_date TEXT NOT NULL,
+        open_micros INTEGER NOT NULL, high_micros INTEGER NOT NULL,
+        low_micros INTEGER NOT NULL, close_micros INTEGER NOT NULL,
+        volume INTEGER NOT NULL, source TEXT NOT NULL, published_at TEXT NOT NULL,
+        import_checksum TEXT NOT NULL,
+        PRIMARY KEY(symbol, trading_date, source),
+        FOREIGN KEY(import_checksum) REFERENCES imports(checksum)
+    );
+    CREATE INDEX IF NOT EXISTS idx_daily_bars_date ON daily_bars(trading_date);
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class DailyBar:
@@ -140,7 +166,7 @@ def latest_close_price(database: Path, symbol: str) -> tuple[float, date] | None
     if not database.exists():
         return None
     with database_connection(database) as connection:
-        connection.execute("CREATE TABLE IF NOT EXISTS daily_bars (symbol TEXT, trading_date TEXT, close_micros INTEGER)")
+        connection.executescript(_DAILY_BARS_SCHEMA_SQL)
         row = connection.execute(
             "SELECT trading_date, close_micros FROM daily_bars WHERE symbol = ? ORDER BY trading_date DESC LIMIT 1",
             (symbol,),
@@ -156,7 +182,7 @@ def average_daily_trading_value(database: Path, symbol: str, window: int = 20) -
     if not database.exists():
         return None
     with database_connection(database) as connection:
-        connection.execute("CREATE TABLE IF NOT EXISTS daily_bars (symbol TEXT, trading_date TEXT, close_micros INTEGER, volume INTEGER)")
+        connection.executescript(_DAILY_BARS_SCHEMA_SQL)
         rows = connection.execute(
             "SELECT close_micros, volume FROM daily_bars WHERE symbol = ? ORDER BY trading_date DESC LIMIT ?",
             (symbol, window),
@@ -228,22 +254,7 @@ def archive_and_import(csv_path: Path, database: Path, archive_root: Path) -> tu
         if connection.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
             connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=FULL")
-        connection.executescript("""
-            CREATE TABLE IF NOT EXISTS imports (
-                checksum TEXT PRIMARY KEY, original_name TEXT NOT NULL, archive_path TEXT NOT NULL,
-                imported_at TEXT NOT NULL, row_count INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS daily_bars (
-                symbol TEXT NOT NULL, trading_date TEXT NOT NULL,
-                open_micros INTEGER NOT NULL, high_micros INTEGER NOT NULL,
-                low_micros INTEGER NOT NULL, close_micros INTEGER NOT NULL,
-                volume INTEGER NOT NULL, source TEXT NOT NULL, published_at TEXT NOT NULL,
-                import_checksum TEXT NOT NULL,
-                PRIMARY KEY(symbol, trading_date, source),
-                FOREIGN KEY(import_checksum) REFERENCES imports(checksum)
-            );
-            CREATE INDEX IF NOT EXISTS idx_daily_bars_date ON daily_bars(trading_date);
-        """)
+        connection.executescript(_DAILY_BARS_SCHEMA_SQL)
         already_imported = connection.execute("SELECT 1 FROM imports WHERE checksum = ?", (checksum,)).fetchone()
         if already_imported:
             return checksum, 0

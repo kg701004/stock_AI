@@ -33,6 +33,31 @@ class HistoricalStorageTests(unittest.TestCase):
         with sqlite3.connect(database) as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM daily_bars").fetchone()[0], 2)
 
+    def test_calling_latest_close_price_before_any_import_does_not_break_later_archive_and_import(self) -> None:
+        """Regression test: latest_close_price() and average_daily_trading_value()
+        used to each CREATE TABLE their own truncated daily_bars schema (fewer
+        columns than archive_and_import's real one). Since "IF NOT EXISTS" is a
+        no-op once any of the three has created the table, calling either of
+        these BEFORE the first real backfill/import (e.g. opening the 持股 or
+        自選 tab on a fresh database) would permanently leave the truncated
+        schema in place and break every subsequent archive_and_import insert."""
+        database = Path("data/test_schema_order.sqlite")
+        archive = Path("data/test_schema_order_archive")
+        database.unlink(missing_ok=True)
+        shutil.rmtree(archive, ignore_errors=True)
+        database.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(database):
+            pass  # the database FILE exists, but has no tables yet
+
+        self.assertIsNone(latest_close_price(database, "2330"))
+        self.assertIsNone(average_daily_trading_value(database, "2330"))
+
+        checksum, count = archive_and_import(Path("data/sample_daily_bars.csv"), database, archive)
+        self.assertEqual(len(checksum), 64)
+        self.assertEqual(count, 2)
+        with sqlite3.connect(database) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM daily_bars").fetchone()[0], 2)
+
     def test_bad_quality_import_is_rejected_and_writes_nothing(self) -> None:
         """A CSV that fails the data_quality gate (here: two rows for the
         same symbol/date/source) must be rejected before anything is

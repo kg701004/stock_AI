@@ -20,6 +20,20 @@ class PortfolioRiskTests(unittest.TestCase):
         self.assertAlmostEqual(report.holding_weights_pct["2330"], 70.59, places=2)
         self.assertTrue(any("2330" in warning for warning in report.warnings))
 
+    def test_missing_metadata_defaults_beta_to_market_average_not_zero(self) -> None:
+        # A symbol with no metadata must contribute beta=1.0 (market average) to
+        # the weighted portfolio beta, not be silently excluded (which would
+        # understate real exposure and under-hedge beta_hedge's contract sizing).
+        timestamp = datetime(2026, 7, 22, tzinfo=timezone.utc)
+        positions = [
+            Position("Test", "2330", 1000, 100, 120, timestamp),
+            Position("Test", "9999", 500, 100, 100, timestamp),
+        ]
+        metadata = {"2330": SecurityMetadata("2330", "半導體", 1.2)}  # "9999" deliberately missing
+        report = assess_owner_portfolio("Test", positions, metadata, self.rules)
+        self.assertAlmostEqual(report.portfolio_beta, 1.14, places=2)
+        self.assertTrue(any("9999" in warning and "1.0" in warning for warning in report.warnings))
+
     def test_correlation(self) -> None:
         self.assertAlmostEqual(pearson_correlation([1, 2, 3, 4], [2, 4, 6, 8]), 1.0)
 
