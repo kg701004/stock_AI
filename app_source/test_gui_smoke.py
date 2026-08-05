@@ -6,6 +6,7 @@ from unittest.mock import patch
 try:
     import tkinter as tk
     from stock_ai_app import StockAiApp
+    from notification_center import list_notifications
 except Exception: tk = None
 
 @unittest.skipIf(tk is None, "Tk is unavailable")
@@ -293,6 +294,50 @@ class GuiSmokeTests(unittest.TestCase):
                 self.assertEqual(str(data_frame.all_update_button["state"]), "normal")
                 self.assertIn("測試更新結果", data_frame.progress_status["text"])
                 self.assertIn("測試費率結果", data_frame.progress_status["text"])
+            finally:
+                root.destroy()
+
+    def test_startup_check_worker_logs_a_notification_when_fee_verification_fails(self):
+        """Regression test: a failed/unconfirmed fee-rate verification used to
+        only ever show in the transient startup status label -- if the user
+        wasn't watching at that moment, they'd never know. It must also land
+        in the durable notification log."""
+        base = Path("data/test_gui_startup_check_fee_failure"); base.mkdir(parents=True, exist_ok=True)
+        paths = {"root": base, "history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
+        paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
+
+        with patch("stock_ai_app.storage_paths", return_value=paths), \
+             patch("holdings_manager.storage_paths", return_value=paths), \
+             patch("watchlist_app.storage_paths", return_value=paths), \
+             patch("stock_ai_app.verify_and_cache", return_value="凱基費率頁格式未完整辨識；保留既有已驗證費率。"), \
+             patch("stock_ai_app.run_startup_check", return_value="測試更新結果"):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = StockAiApp(root); root.update_idletasks()
+                app.data_management_frame._startup_check_worker()
+                root.update()
+                records = list_notifications(paths["decision_database"])
+                self.assertTrue(any(r.category == "fee_rate_verification" for r in records))
+            finally:
+                root.destroy()
+
+    def test_startup_check_worker_does_not_log_a_notification_when_fee_verification_succeeds(self):
+        base = Path("data/test_gui_startup_check_fee_success"); base.mkdir(parents=True, exist_ok=True)
+        paths = {"root": base, "history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
+        paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
+
+        with patch("stock_ai_app.storage_paths", return_value=paths), \
+             patch("holdings_manager.storage_paths", return_value=paths), \
+             patch("watchlist_app.storage_paths", return_value=paths), \
+             patch("stock_ai_app.verify_and_cache", return_value="凱基公開牌告費率已連線確認。"), \
+             patch("stock_ai_app.run_startup_check", return_value="測試更新結果"):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = StockAiApp(root); root.update_idletasks()
+                app.data_management_frame._startup_check_worker()
+                root.update()
+                records = list_notifications(paths["decision_database"])
+                self.assertFalse(any(r.category == "fee_rate_verification" for r in records))
             finally:
                 root.destroy()
 

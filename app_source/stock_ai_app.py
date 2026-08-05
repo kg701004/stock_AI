@@ -221,6 +221,14 @@ class DataManagementFrame(ttk.Frame):
 
     def _startup_check_worker(self) -> None:
         fee_result = verify_and_cache(self.paths["root"] / "kgi_fee_reference.json")
+        if fee_result != "凱基公開牌告費率已連線確認。":
+            # Previously this only ever showed in the transient startup status
+            # label -- if the fee page's format ever actually drifts from the
+            # hardcoded rates in broker_fees.py, the only signal was a label
+            # the user had to catch in the moment. record_notification's own
+            # 20h dedupe window keeps this from re-firing on every launch
+            # while the same failure persists.
+            record_notification(self.paths["decision_database"], "fee_rate_verification", "", fee_result, datetime.now().astimezone())
         check_result = run_startup_check(self.history_database, self.paths["imports"], self.paths["raw_archive"], decision_database=self.paths["decision_database"])
         integrity_result = self._tracked_symbols_integrity_summary()
         def done() -> None:
