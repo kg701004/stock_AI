@@ -25,6 +25,8 @@ SCHEDULES = {
     "TAIFEX 夜盤": "每交易日上午約 07:00 後",
     "VIX／全球風險": "美股收盤後，台灣時間約 07:00–09:00",
     "GAP 個股缺口補齊": "開機時自動執行，每日至多一次",
+    "REVERSAL 短期反彈檢查": "開機時自動執行，每日至多一次",
+    "DRIFT 配置偏離檢查": "開機時自動執行，每日至多一次",
 }
 
 
@@ -153,6 +155,29 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
         gap_result = _catch_up_tracked_symbols_gap(history_database, imports_directory, archive_directory, decision_database, now)
         if gap_result:
             result = f"{result}；{gap_result}"
+
+    reversal_source = "REVERSAL 短期反彈檢查"
+    if reversal_source not in completed and decision_database is not None:
+        try:
+            from notification_center import check_short_term_reversal_triggers
+            fired = check_short_term_reversal_triggers(decision_database, history_database, now)
+            message = f"短期反彈檢查完成，觸發 {len(fired)} 筆"
+            record_status(history_database, reversal_source, "成功", message, now)
+            result = f"{result}；{message}"
+        except Exception as error:
+            record_status(history_database, reversal_source, "失敗", f"短期反彈檢查失敗：{error}", now)
+
+    drift_source = "DRIFT 配置偏離檢查"
+    if drift_source not in completed and decision_database is not None:
+        try:
+            from notification_center import check_allocation_drift
+            fired = check_allocation_drift(decision_database, history_database, now=now)
+            message = f"配置偏離檢查完成，觸發 {len(fired)} 筆"
+            record_status(history_database, drift_source, "成功", message, now)
+            result = f"{result}；{message}"
+        except Exception as error:
+            record_status(history_database, drift_source, "失敗", f"配置偏離檢查失敗：{error}", now)
+
     return result
 
 

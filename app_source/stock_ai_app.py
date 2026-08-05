@@ -621,7 +621,12 @@ class NotificationCenterFrame(ttk.Frame):
     _schedule_periodic_check) so a hit is caught even if this tab is never opened.
     """
     CHECK_INTERVAL_MS = 15 * 60 * 1000  # 15 minutes
-    CATEGORY_LABELS = {"watchlist_trigger": "自選股觸價", "data_update": "資料更新"}
+    CATEGORY_LABELS = {
+        "watchlist_trigger": "自選股觸價",
+        "data_update": "資料更新",
+        "short_term_reversal": "短期反彈觀察",
+        "allocation_drift": "配置偏離警示",
+    }
 
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master, padding=12)
@@ -657,8 +662,32 @@ class NotificationCenterFrame(ttk.Frame):
         return "neutral"
 
     def check_now(self) -> None:
-        fired = check_watchlist_triggers(storage_paths()["decision_database"], datetime.now().astimezone())
-        self.status.configure(text=f"檢查完成（{datetime.now().strftime('%H:%M:%S')}）：{f'發現 {len(fired)} 筆新觸發' if fired else '沒有新的觸發事件'}。")
+        fired_all = []
+        now = datetime.now().astimezone()
+        decision_db = storage_paths()["decision_database"]
+        history_db = storage_paths()["history_database"]
+
+        try:
+            fired_wl = check_watchlist_triggers(decision_db, now)
+            fired_all.extend(fired_wl)
+        except Exception:
+            pass
+
+        try:
+            from notification_center import check_short_term_reversal_triggers
+            fired_reversal = check_short_term_reversal_triggers(decision_db, history_db, now)
+            fired_all.extend(fired_reversal)
+        except Exception:
+            pass
+
+        try:
+            from notification_center import check_allocation_drift
+            fired_drift = check_allocation_drift(decision_db, history_db, now=now)
+            fired_all.extend(fired_drift)
+        except Exception:
+            pass
+
+        self.status.configure(text=f"檢查完成（{datetime.now().strftime('%H:%M:%S')}）：{f'發現 {len(fired_all)} 筆新觸發' if fired_all else '沒有新的觸發事件'}。")
         self.refresh()
 
     def refresh(self) -> None:
@@ -670,10 +699,27 @@ class NotificationCenterFrame(ttk.Frame):
         self.after(self.CHECK_INTERVAL_MS, self._periodic_check)
 
     def _periodic_check(self) -> None:
+        now = datetime.now().astimezone()
+        decision_db = storage_paths()["decision_database"]
+        history_db = storage_paths()["history_database"]
+
         try:
-            check_watchlist_triggers(storage_paths()["decision_database"], datetime.now().astimezone())
+            check_watchlist_triggers(decision_db, now)
         except Exception:
             pass
+
+        try:
+            from notification_center import check_short_term_reversal_triggers
+            check_short_term_reversal_triggers(decision_db, history_db, now)
+        except Exception:
+            pass
+
+        try:
+            from notification_center import check_allocation_drift
+            check_allocation_drift(decision_db, history_db, now=now)
+        except Exception:
+            pass
+
         self.refresh()
         self._schedule_periodic_check()
 

@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from update_manager import list_statuses, record_status, run_all_public_daily_updates, run_manual_update
+from update_manager import (
+    list_statuses,
+    record_status,
+    run_all_public_daily_updates,
+    run_manual_update,
+    run_startup_check,
+)
 
 
 class UpdateManagerTests(unittest.TestCase):
@@ -53,3 +59,57 @@ class UpdateManagerTests(unittest.TestCase):
         self.assertEqual(statuses["TWSE 日行情"], "失敗")
         self.assertEqual(statuses["TPEx 日行情"], "成功")
         self.assertEqual(statuses["VIX／全球風險"], "成功")
+
+    def test_new_startup_check_schedules_and_resilience(self) -> None:
+        """Verify that the new REVERSAL and DRIFT checks are called, and a failure in one
+        does not prevent the other from completing.
+        """
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
+        decision_database = Path("data/test_update_decision.sqlite")
+        if decision_database.exists():
+            decision_database.unlink()
+
+        try:
+            # 1. Test normal execution of both checks
+            with patch("update_manager.list_statuses", return_value=[]), \
+                 patch("update_manager.verify_archive", return_value=[]), \
+                 patch("update_manager.run_manual_update"), \
+                 patch("notification_center.check_short_term_reversal_triggers", return_value=["msg1"]) as mock_reversal, \
+                 patch("notification_center.check_allocation_drift", return_value=["msg2"]) as mock_drift:
+
+                result = run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
+                self.assertIn("短期反彈檢查完成", result)
+                self.assertIn("配置偏離檢查完成", result)
+                mock_reversal.assert_called_once()
+                mock_drift.assert_called_once()
+
+                # Status should be updated to "成功"
+                statuses = {item.source: item.status for item in list_statuses(self.database)}
+                self.assertEqual(statuses["REVERSAL 短期反彈檢查"], "成功")
+                self.assertEqual(statuses["DRIFT 配置偏離檢查"], "成功")
+
+            # Reset database table for the second test
+            with sqlite3.connect(self.database) as connection:
+                connection.execute("DELETE FROM data_update_status")
+
+            # 2. Test resilience when one check throws an error
+            with patch("update_manager.list_statuses", return_value=[]), \
+                 patch("update_manager.verify_archive", return_value=[]), \
+                 patch("update_manager.run_manual_update"), \
+                 patch("notification_center.check_short_term_reversal_triggers", side_effect=ValueError("simulated reversal failure")) as mock_reversal, \
+                 patch("notification_center.check_allocation_drift", return_value=["msg2"]) as mock_drift:
+
+                result = run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
+                # Reversal check fails but drift check still runs and is appended to result
+                self.assertIn("配置偏離檢查完成", result)
+                mock_reversal.assert_called_once()
+                mock_drift.assert_called_once()
+
+                # Reversal status should be "失敗", drift status should be "成功"
+                statuses = {item.source: item.status for item in list_statuses(self.database)}
+                self.assertEqual(statuses["REVERSAL 短期反彈檢查"], "失敗")
+                self.assertEqual(statuses["DRIFT 配置偏離檢查"], "成功")
+
+        finally:
+            if decision_database.exists():
+                decision_database.unlink()

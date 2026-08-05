@@ -5,7 +5,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from notification_center import check_allocation_drift, check_watchlist_triggers, list_notifications, record_notification
+from notification_center import (
+    check_allocation_drift,
+    check_watchlist_triggers,
+    check_short_term_reversal_triggers,
+    list_notifications,
+    record_notification,
+)
 from transaction_ledger import set_current_price
 from watchlist_repository import add_item
 
@@ -265,6 +271,88 @@ class NotificationCenterTests(unittest.TestCase):
         fired = check_allocation_drift(self.database, self.history_database, threshold_pct=5.0, now=self.now, notify_os=False)
         self.assertEqual(len(fired), 0)
         self.assertEqual(len(list_notifications(self.database)), 0)
+
+    def _seed_daily_bars(self, symbol: str, prices: list[float]) -> None:
+        import sqlite3
+        self.history_database.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.history_database)
+        try:
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS daily_bars (
+                    symbol TEXT NOT NULL, trading_date TEXT NOT NULL,
+                    open_micros INTEGER NOT NULL, high_micros INTEGER NOT NULL,
+                    low_micros INTEGER NOT NULL, close_micros INTEGER NOT NULL,
+                    volume INTEGER NOT NULL, source TEXT NOT NULL, published_at TEXT NOT NULL,
+                    import_checksum TEXT NOT NULL,
+                    PRIMARY KEY(symbol, trading_date, source)
+                )
+            """)
+            for idx, price in enumerate(prices):
+                date = f"2026-01-{1 + idx:02d}"
+                connection.execute(
+                    "INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, 'TEST', ?, 'chk')",
+                    (symbol, date, int((price - 1) * 1_000_000), int((price + 1) * 1_000_000),
+                     int((price - 2) * 1_000_000), int(price * 1_000_000), 1_000_000, f"{date}T13:30:00+08:00"),
+                )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def test_check_short_term_reversal_triggers_normal(self) -> None:
+        add_item(self.database, "2330", "台積電", 100.0, 120.0, 90.0, self.now)
+        # Seeds prices: drop from 100 to 90 is 10% (>= 8%)
+        self._seed_daily_bars("2330", [100.0, 99.0, 98.0, 97.0, 95.0, 90.0])
+
+        fired = check_short_term_reversal_triggers(
+            self.database, self.history_database, self.now, lookback=5, drop_pct=8.0, notify_os=False
+        )
+        self.assertEqual(len(fired), 1)
+        self.assertIn("2330 近5日跌幅達8%以上", fired[0])
+
+        records = list_notifications(self.database)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].category, "short_term_reversal")
+        self.assertEqual(records[0].symbol, "2330")
+
+    def test_check_short_term_reversal_triggers_insufficient_data(self) -> None:
+        add_item(self.database, "2330", "台積電", 100.0, 120.0, 90.0, self.now)
+        self._seed_daily_bars("2330", [100.0, 90.0]) # only 2 bars, lookback 5 needs 6 bars
+
+        fired = check_short_term_reversal_triggers(
+            self.database, self.history_database, self.now, lookback=5, drop_pct=8.0, notify_os=False
+        )
+        self.assertEqual(len(fired), 0)
+
+    def test_check_short_term_reversal_triggers_no_trigger(self) -> None:
+        add_item(self.database, "2330", "台積電", 100.0, 120.0, 90.0, self.now)
+        self._seed_daily_bars("2330", [100.0, 99.0, 98.0, 97.0, 96.0, 95.0]) # drop 5% (< 8%)
+
+        fired = check_short_term_reversal_triggers(
+            self.database, self.history_database, self.now, lookback=5, drop_pct=8.0, notify_os=False
+        )
+        self.assertEqual(len(fired), 0)
+
+    def test_check_short_term_reversal_triggers_deduplication(self) -> None:
+        add_item(self.database, "2330", "台積電", 100.0, 120.0, 90.0, self.now)
+        self._seed_daily_bars("2330", [100.0, 99.0, 98.0, 97.0, 95.0, 90.0])
+
+        fired = check_short_term_reversal_triggers(
+            self.database, self.history_database, self.now, lookback=5, drop_pct=8.0, notify_os=False
+        )
+        self.assertEqual(len(fired), 1)
+
+        # Call again on the same day -> deduplicated
+        fired_again = check_short_term_reversal_triggers(
+            self.database, self.history_database, self.now, lookback=5, drop_pct=8.0, notify_os=False
+        )
+        self.assertEqual(len(fired_again), 0)
+
+        # Call on next day -> triggers again
+        next_day = self.now + timedelta(days=1)
+        fired_next_day = check_short_term_reversal_triggers(
+            self.database, self.history_database, next_day, lookback=5, drop_pct=8.0, notify_os=False
+        )
+        self.assertEqual(len(fired_next_day), 1)
 
 
 if __name__ == "__main__":
