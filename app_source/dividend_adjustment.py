@@ -23,7 +23,14 @@ from database_utils import database_connection
 from historical_storage import DailyBar
 from pathlib import Path
 
-TWSE_EX_RIGHTS_URL = "https://www.twse.com.tw/rwd/zh/exRight/TWT49U"
+# 2026-08-06: the old "/rwd/zh/exRight/TWT49U" prefix now returns a bare
+# HTTP 307 with no Location header for every request (live-confirmed, not a
+# transient blip -- this was the actual root cause of the ex-rights fetch
+# failures this session could previously only detect and notify about, never
+# fix). "/exchangeReport/TWT49U" is the current working prefix, confirmed
+# live (stat=OK, real rows) and consistent with what the rest of the
+# codebase's working TWSE endpoints already use.
+TWSE_EX_RIGHTS_URL = "https://www.twse.com.tw/exchangeReport/TWT49U"
 
 
 def ensure_schema(connection) -> None:

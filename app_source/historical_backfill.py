@@ -43,7 +43,18 @@ from historical_storage import DailyBar, archive_and_import, ensure_wal_mode
 from security_catalog import lookup_market
 from twse_daily_importer import _number, write_normalized_csv
 
-TWSE_STOCK_DAY_URL = "https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY"
+### 2026-08-06 live-tested finding while investigating why the backtest
+# validation sample was so thin: 69% (52,327/75,195) of every historical
+# backfill attempt ever made this session had status="failed" in
+# backfill_progress. Reproduced live: the OLD "/rwd/zh/..." TWSE URL prefix
+# now returns a bare HTTP 307 with no Location header (unfollowable) for
+# EVERY request, including well-established symbols/months that definitely
+# have data (e.g. 2330 2026-07). The current, working prefix is
+# "/exchangeReport/..." -- confirmed live (stat=OK, real rows) and already
+# what twse_daily_importer.py/external_data_importers.py use for their own
+# (working) daily endpoints. Retries already exhaust MAX_RETRIES against the
+# same dead URL, so this was never a transient blip.
+TWSE_STOCK_DAY_URL = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
 TPEX_TRADING_STOCK_URL = "https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock"
 
 # Real, confirmed floors of each free daily-bar source -- not the exchange's
