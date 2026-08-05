@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import json
 import math
 from collections import defaultdict
@@ -42,19 +41,6 @@ def load_risk_rules(path: Path) -> Mapping[str, float | str]:
     if rules["maximum_portfolio_beta"] <= 0 or not -1 <= rules["high_correlation_threshold"] <= 1:
         raise ValueError("beta/correlation thresholds are invalid")
     return rules
-
-
-def load_security_metadata(path: Path) -> dict[str, SecurityMetadata]:
-    """Load a local sector and beta mapping; absent mapping should be treated as risk."""
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        required = {"symbol", "sector", "beta"}
-        if reader.fieldnames is None or not required <= set(reader.fieldnames):
-            raise ValueError("metadata CSV needs symbol, sector and beta")
-        result = {}
-        for row in reader:
-            result[row["symbol"]] = SecurityMetadata(row["symbol"], row["sector"], float(row["beta"]))
-    return result
 
 
 def stress_correlation(correlation: float, shock_factor: float) -> float:

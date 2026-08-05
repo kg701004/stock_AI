@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from database_utils import database_connection
+
 
 MIN_BARS_PER_CALENDAR_YEAR = 200
 
@@ -53,17 +55,19 @@ def check_coverage(database: Path, symbol: str, years: int = 10, as_of: date | N
     target_years = tuple(range(as_of.year - years, as_of.year))
     if not database.exists():
         return HistoryCoverage(symbol, years, None, None, 0, (), target_years, False, "尚未建立歷史資料庫；請先匯入日線資料。")
-    connection: sqlite3.Connection | None = None
     try:
-        connection = sqlite3.connect(database)
-        rows = connection.execute(
-            "SELECT trading_date FROM daily_bars WHERE symbol = ? ORDER BY trading_date", (symbol,)
-        ).fetchall()
+        # timeout=30 (via database_connection) lets this wait out a brief
+        # write lock from a concurrent historical_backfill.py worker instead
+        # of raising immediately -- a raw sqlite3.connect() here previously
+        # used the 5s default, and its OperationalError was caught by the
+        # same except below as "table not created yet", so a real backfill
+        # in progress could misreport as "run an import first".
+        with database_connection(database) as connection:
+            rows = connection.execute(
+                "SELECT trading_date FROM daily_bars WHERE symbol = ? ORDER BY trading_date", (symbol,)
+            ).fetchall()
     except sqlite3.OperationalError:
         return HistoryCoverage(symbol, years, None, None, 0, (), target_years, False, "歷史資料表尚未建立；請先匯入日線資料。")
-    finally:
-        if connection is not None:
-            connection.close()
     dates = tuple(date.fromisoformat(row[0]) for row in rows)
     counts = {year: 0 for year in target_years}
     for trading_date in dates:
