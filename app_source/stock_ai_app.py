@@ -71,6 +71,8 @@ class PortfolioRiskFrame(ttk.Frame):
         self.owner = ttk.Combobox(controls, state="readonly", width=20); self.owner.pack(side="left", padx=(0, 8)); self.owner.bind("<<ComboboxSelected>>", lambda _: self.refresh())
         ttk.Button(controls, text="更新風險", command=self.refresh).pack(side="left")
         self.summary = ttk.Label(self, font=("Microsoft JhengHei UI", 11, "bold")); self.summary.pack(anchor="w", pady=(10, 4))
+        self.sample_data_warn = ttk.Label(self, style="Danger.TLabel", font=("Microsoft JhengHei UI", 10, "bold"))
+        self.sample_data_warn.pack(anchor="w", pady=(0, 4))
         tables = ttk.Frame(self); tables.pack(fill="both", expand=True)
         self.holdings = ttk.Treeview(tables, columns=("symbol", "weight"), show="headings", height=8); self.sectors = ttk.Treeview(tables, columns=("sector", "weight"), show="headings", height=8)
         for tree, first, label in ((self.holdings, "symbol", "股票代號"), (self.sectors, "sector", "產業")):
@@ -89,7 +91,13 @@ class PortfolioRiskFrame(ttk.Frame):
     def refresh(self) -> None:
         ledger = calculate_holdings(storage_paths()["decision_database"])
         positions = [Position(x.owner, x.symbol, x.shares, x.average_cost, x.current_price, datetime.now().astimezone()) for x in ledger if x.current_price is not None]
-        if not positions: positions = load_positions_csv(Path("data/sample_positions.csv"))
+        if not positions:
+            positions = load_positions_csv(Path("data/sample_positions.csv"))
+            self._using_sample_data = True
+            self.sample_data_warn.configure(text="⚠ 目前顯示的是示範資料（非您的真實持股），請先在「持股管理」新增交易並設定現價")
+        else:
+            self._using_sample_data = False
+            self.sample_data_warn.configure(text="")
         owners = sorted({x.owner for x in positions}); self.owner["values"] = owners
         if owners and self.owner.get() not in owners: self.owner.set(owners[0])
         if not owners: return
@@ -502,6 +510,8 @@ class HedgeAdviceFrame(ttk.Frame):
         self.owner = ttk.Combobox(controls, state="readonly", width=18); self.owner.pack(side="left", padx=(0, 8)); self.owner.bind("<<ComboboxSelected>>", lambda _: self.refresh())
         ttk.Button(controls, text="更新", command=self.refresh).pack(side="left")
         self.summary = ttk.Label(self, font=("Microsoft JhengHei UI", 11, "bold")); self.summary.pack(anchor="w", pady=(10, 8))
+        self.sample_data_warn = ttk.Label(self, style="Danger.TLabel", font=("Microsoft JhengHei UI", 10, "bold"))
+        self.sample_data_warn.pack(anchor="w", pady=(0, 8))
 
         target_row = ttk.Frame(self); target_row.pack(anchor="w", fill="x")
         ttk.Label(target_row, text="目標 Beta", width=12).pack(side="left")
@@ -565,7 +575,13 @@ class HedgeAdviceFrame(ttk.Frame):
     def refresh(self) -> None:
         ledger = calculate_holdings(storage_paths()["decision_database"])
         positions = [Position(x.owner, x.symbol, x.shares, x.average_cost, x.current_price, datetime.now().astimezone()) for x in ledger if x.current_price is not None]
-        if not positions: positions = load_positions_csv(Path("data/sample_positions.csv"))
+        if not positions:
+            positions = load_positions_csv(Path("data/sample_positions.csv"))
+            self._using_sample_data = True
+            self.sample_data_warn.configure(text="⚠ 目前顯示的是示範資料（非您的真實持股），請先在「持股管理」新增交易並設定現價")
+        else:
+            self._using_sample_data = False
+            self.sample_data_warn.configure(text="")
         owners = sorted({x.owner for x in positions}); self.owner["values"] = owners
         if owners and self.owner.get() not in owners: self.owner.set(owners[0])
         if not owners:
