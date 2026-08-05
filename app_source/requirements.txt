@@ -1,0 +1,8 @@
+# Third-party dependencies for the stock_AI app.
+# Install with: python -m pip install -r requirements.txt
+#
+# This app is Windows-only (Tkinter GUI, win11toast notifications).
+
+certifi>=2026.7.22
+matplotlib>=3.11.1
+win11toast>=0.36.3

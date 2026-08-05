@@ -195,6 +195,11 @@ def check_allocation_drift(
         for suggestion in plan.suggestions:
             if suggestion.symbol not in owned_symbols:
                 continue
+            if suggestion.symbol not in scores:
+                # No factor score on record for this holding -- build_allocation_plan
+                # defaults its target weight to 0% in this case, which would look
+                # like a large "drift" that isn't real; skip until it's been scored.
+                continue
 
             drift = abs(suggestion.current_weight_pct - suggestion.target_weight_pct)
             if drift > threshold_pct:

@@ -245,6 +245,27 @@ class NotificationCenterTests(unittest.TestCase):
         self.assertEqual(len(fired), 0)
         self.assertEqual(len(list_notifications(self.database)), 0)
 
+    def test_check_allocation_drift_skips_holdings_without_a_saved_score(self) -> None:
+        # An owned symbol with no factor score on record must not be treated as
+        # "100% drift" just because build_allocation_plan defaults its target to 0%.
+        from security_catalog import ensure_schema as ensure_securities_schema
+        from database_utils import database_connection
+        with database_connection(self.history_database) as conn:
+            ensure_securities_schema(conn)
+            conn.execute(
+                "INSERT INTO securities (symbol, name, market, sector, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+                ("2330", "台積電", "TWSE", "半導體業", "2026-07-25", "2026-07-25")
+            )
+
+        from transaction_ledger import Transaction, add_transaction, set_current_price
+        add_transaction(self.database, Transaction(None, "Will", "2330", self.now, "BUY", 100, 100, 0))
+        set_current_price(self.database, "2330", 100, self.now)
+        # Deliberately no save_factor_scores(...) call for 2330.
+
+        fired = check_allocation_drift(self.database, self.history_database, threshold_pct=5.0, now=self.now, notify_os=False)
+        self.assertEqual(len(fired), 0)
+        self.assertEqual(len(list_notifications(self.database)), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
