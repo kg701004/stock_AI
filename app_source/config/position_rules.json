@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "add_minimum_score": 75,
+  "add_maximum_risk_score": 35,
+  "hold_minimum_score": 50,
+  "reduce_maximum_score": 44,
+  "reduce_minimum_risk_score": 70,
+  "maximum_position_weight_pct": 20
+}

@@ -1,0 +1,24 @@
+{
+  "version": "1.0",
+  "weights": {
+    "technical": 17,
+    "market_breadth": 11,
+    "sector_rotation": 11,
+    "fundamentals": 13,
+    "institutional_flow": 9,
+    "derivatives": 8,
+    "global_risk": 9,
+    "sentiment": 7,
+    "events": 5,
+    "liquidity": 5,
+    "valuation": 5
+  },
+  "thresholds": {
+    "strong_watch": 75,
+    "bullish_watch": 60,
+    "neutral": 45,
+    "high_risk": 30,
+    "minimum_liquidity_score": 35,
+    "maximum_risk_penalty": 25
+  }
+}

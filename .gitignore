@@ -1,0 +1,33 @@
+# Databases (contain real personal holdings/decisions, or are large regenerable caches)
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Build/release artifacts
+app_source/build/
+app_source/dist/
+portable_release_20260723/
+
+# Raw/generated data caches (regenerable via backfill)
+imports/
+raw_archive/
+app_source/data/raw_archive/
+app_source/data/*_archive/
+backups/
+
+# Local machine config, not project source
+.claude/
+.mcp.json
+
+# Leftover local workspace from a prior Jules session (not project source)
+jules_session_*/
+
+# Screenshots that may show real account data
+shot1.png

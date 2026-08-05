@@ -1,0 +1,7 @@
+{
+  "version": "1.0",
+  "maximum_position_weight_pct": 20,
+  "maximum_sector_weight_pct": 40,
+  "maximum_portfolio_beta": 1.2,
+  "high_correlation_threshold": 0.75
+}

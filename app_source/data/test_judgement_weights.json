@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "weights": {
+    "technical": 10,
+    "market_breadth": 5,
+    "sector_rotation": 5,
+    "fundamentals": 5,
+    "institutional_flow": 5,
+    "derivatives": 5,
+    "global_risk": 5,
+    "sentiment": 5,
+    "events": 5,
+    "liquidity": 5,
+    "valuation": 5
+  }
+}

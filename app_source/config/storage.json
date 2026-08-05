@@ -1,0 +1,12 @@
+{
+  "root": "StockAI_Data",
+  "databases": {
+    "history": "history.sqlite",
+    "decisions": "decision_audit.sqlite"
+  },
+  "directories": {
+    "raw_archive": "raw_archive",
+    "backups": "backups",
+    "imports": "imports"
+  }
+}

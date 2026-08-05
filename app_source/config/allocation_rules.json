@@ -1,0 +1,7 @@
+{
+  "version": "1.0",
+  "minimum_cash_reserve_pct": 15,
+  "target_holding_count": 5,
+  "minimum_candidate_score": 55,
+  "rebalance_tolerance_pct": 2
+}

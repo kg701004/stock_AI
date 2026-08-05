@@ -1,0 +1,3 @@
+symbol,date,open,high,low,close,volume,source,published_at
+2330,2026-07-21,900,925,895,920,32100000,manual_sample,2026-07-21T14:30:00+08:00
+2317,2026-07-21,160,166,159,165,28900000,manual_sample,2026-07-21T14:30:00+08:00
