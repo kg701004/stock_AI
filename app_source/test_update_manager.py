@@ -81,32 +81,51 @@ class UpdateManagerTests(unittest.TestCase):
             summary = run_all_public_daily_updates(self.database, self.imports, self.archive)
         self.assertIsInstance(summary, str)
 
-    def test_daily_update_fetches_and_stores_market_indices(self) -> None:
+    def test_startup_check_fetches_and_stores_market_indices_even_when_nothing_else_is_due(self) -> None:
         """Regression test: fetch_twse_index/fetch_tpex_index/
         import_market_indices existed (used by market_context_factor_score)
         but were never actually called anywhere -- confirmed by running the
         real app: 個股評分輸入's 情緒指標(自動建議) stayed stuck at the
         neutral 50 fallback forever because market_index_history was never
-        populated. The daily update must now fetch and store both."""
-        with patch("update_manager.fetch_twse", side_effect=RuntimeError("skip TWSE daily bars")), \
-             patch("update_manager.fetch_tpex", side_effect=RuntimeError("skip TPEx daily bars")), \
-             patch("update_manager.fetch_fred_vix_csv", side_effect=RuntimeError("skip VIX")), \
+        populated. This was first fixed by nesting the fetch inside
+        run_all_public_daily_updates(), but that function only runs when
+        TWSE/TPEx/VIX have something due or the archive fails verification --
+        on a quiet day (everything already "成功" today, archive healthy) it
+        never runs at all. Must be standalone (like GAP/REVERSAL/DRIFT) so it
+        gets a real attempt on every startup regardless of the other
+        sources' state."""
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
+        with patch("update_manager.list_statuses", return_value=[]), \
+             patch("update_manager.verify_archive", return_value=[]), \
+             patch("update_manager.run_manual_update"), \
+             patch("notification_center.check_short_term_reversal_triggers", return_value=[]), \
+             patch("notification_center.check_allocation_drift", return_value=[]), \
              patch("update_manager.fetch_twse_index", return_value=16000.0), \
              patch("update_manager.fetch_tpex_index", return_value=[(date(2026, 8, 4), 200.0)]):
-            run_all_public_daily_updates(self.database, self.imports, self.archive)
+            run_startup_check(self.database, self.imports, self.archive, now)
         with sqlite3.connect(self.database) as connection:
             rows = connection.execute("SELECT market, close_value FROM market_index_history ORDER BY market").fetchall()
         self.assertIn(("TPEx", 200.0), rows)
         self.assertIn(("TWSE", 16000.0), rows)
+        statuses = {item.source: item.status for item in list_statuses(self.database)}
+        self.assertEqual(statuses["MARKET_INDEX 大盤櫃買指數"], "成功")
 
     def test_market_index_fetch_failure_is_recorded_as_a_notification(self) -> None:
         decision_database = Path("data/test_update_status_decision_index.sqlite")
         decision_database.unlink(missing_ok=True)
-        with patch("update_manager.fetch_twse_index", side_effect=RuntimeError("simulated outage")):
-            summary = run_all_public_daily_updates(self.database, self.imports, self.archive, decision_database)
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
+        with patch("update_manager.list_statuses", return_value=[]), \
+             patch("update_manager.verify_archive", return_value=[]), \
+             patch("update_manager.run_manual_update"), \
+             patch("notification_center.check_short_term_reversal_triggers", return_value=[]), \
+             patch("notification_center.check_allocation_drift", return_value=[]), \
+             patch("update_manager.fetch_twse_index", side_effect=RuntimeError("simulated outage")):
+            summary = run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
         self.assertIsInstance(summary, str)
         records = list_notifications(decision_database)
         self.assertTrue(any(r.category == "market_index_fetch_failed" for r in records))
+        statuses = {item.source: item.status for item in list_statuses(self.database)}
+        self.assertEqual(statuses["MARKET_INDEX 大盤櫃買指數"], "失敗")
 
     def test_new_startup_check_schedules_and_resilience(self) -> None:
         """Verify that the new REVERSAL and DRIFT checks are called, and a failure in one

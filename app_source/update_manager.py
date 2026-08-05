@@ -27,6 +27,7 @@ SCHEDULES = {
     "GAP 個股缺口補齊": "開機時自動執行，每日至多一次",
     "REVERSAL 短期反彈檢查": "開機時自動執行，每日至多一次",
     "DRIFT 配置偏離檢查": "開機時自動執行，每日至多一次",
+    "MARKET_INDEX 大盤櫃買指數": "開機時自動執行，每日至多一次",
 }
 
 
@@ -137,25 +138,6 @@ def run_all_public_daily_updates(history_database: Path, imports_directory: Path
             except Exception:
                 pass
     try:
-        # market_context_factor_score (the "sentiment" auto factor) reads
-        # market_index_history -- without this call nothing ever populates
-        # that table, so the factor silently stays at the neutral 50
-        # fallback forever (confirmed by actually running the app: the
-        # fetch/store functions existed but were never wired to run).
-        today = datetime.now(ZoneInfo("Asia/Taipei")).date()
-        twse_close = fetch_twse_index(today)
-        records = [(today, "TWSE", twse_close)] if twse_close is not None else []
-        records.extend((d, "TPEx", close) for d, close in fetch_tpex_index())
-        if records:
-            import_market_indices(history_database, records)
-    except Exception as error:
-        if decision_database is not None:
-            try:
-                from notification_center import record_notification
-                record_notification(decision_database, "market_index_fetch_failed", "", f"大盤/櫃買指數更新失敗（{type(error).__name__}）；大盤情境因子可能使用過期或不足資料。", datetime.now().astimezone())
-            except Exception:
-                pass
-    try:
         update_valuation_snapshots(history_database)
     except Exception:
         pass  # Valuation (PE/yield/PB) is supplementary; never let it fail the whole daily update.
@@ -207,6 +189,34 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
             result = f"{result}；{message}"
         except Exception as error:
             record_status(history_database, drift_source, "失敗", f"配置偏離檢查失敗：{error}", now)
+
+    market_index_source = "MARKET_INDEX 大盤櫃買指數"
+    if market_index_source not in completed:
+        # market_context_factor_score (the "sentiment" auto factor) reads
+        # market_index_history -- previously nothing ever called the
+        # fetchers, so the factor silently stayed at the neutral 50
+        # fallback forever. This was ALSO once nested inside
+        # run_all_public_daily_updates, which only runs when TWSE/TPEx/VIX
+        # have something due or the archive fails verification -- on an
+        # otherwise-quiet day it would never fire at all. Standalone here
+        # (like GAP/REVERSAL/DRIFT) guarantees one real attempt per day
+        # regardless of the other sources' state.
+        try:
+            twse_close = fetch_twse_index(now.date())
+            records = [(now.date(), "TWSE", twse_close)] if twse_close is not None else []
+            records.extend((d, "TPEx", close) for d, close in fetch_tpex_index())
+            if records:
+                import_market_indices(history_database, records)
+            message = f"大盤/櫃買指數更新完成，寫入 {len(records)} 筆"
+            record_status(history_database, market_index_source, "成功", message, now)
+        except Exception as error:
+            record_status(history_database, market_index_source, "失敗", f"大盤/櫃買指數更新失敗：{error}", now)
+            if decision_database is not None:
+                try:
+                    from notification_center import record_notification
+                    record_notification(decision_database, "market_index_fetch_failed", "", f"大盤/櫃買指數更新失敗（{type(error).__name__}）；大盤情境因子可能使用過期或不足資料。", now)
+                except Exception:
+                    pass
 
     return result
 
