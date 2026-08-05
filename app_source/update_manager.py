@@ -77,8 +77,28 @@ def _grow_securities_catalog(history_database: Path, entries: list[tuple[str, st
         pass
 
 
-def run_manual_update(source: str, history_database: Path, imports_directory: Path, archive_directory: Path) -> str:
-    """Fetch/import supported free public EOD sources and audit outcome in SQLite."""
+def _notify_data_update_failure(decision_database: Path | None, source: str, message: str, now: datetime) -> None:
+    """Best-effort; a notification-log write failure must never mask the
+    original update failure it's trying to surface."""
+    if decision_database is None:
+        return
+    try:
+        from notification_center import record_notification
+        record_notification(decision_database, "data_update_failed", str(source), f"{source}：{message}", now)
+    except Exception:
+        pass
+
+
+def run_manual_update(source: str, history_database: Path, imports_directory: Path, archive_directory: Path, decision_database: Path | None = None) -> str:
+    """Fetch/import supported free public EOD sources and audit outcome in SQLite.
+
+    decision_database is optional and, when given, durably notifies on
+    failure -- previously only the manual "更新" button's caller notified
+    (by wrapping the returned message itself); the automatic startup-check
+    path below fed the same failures only into the 資料管理 status table,
+    invisible unless the user opened that tab. Left unwired from the manual
+    button's own call sites in stock_ai_app.py so those keep notifying
+    exactly once via their existing post-call record_notification, not twice."""
     now = datetime.now(ZoneInfo("Asia/Taipei"))
     try:
         if source == "TWSE 日行情":
@@ -108,13 +128,14 @@ def run_manual_update(source: str, history_database: Path, imports_directory: Pa
     except Exception as error:
         message = f"更新失敗：{error}"
         record_status(history_database, source, "失敗", message, now)
+        _notify_data_update_failure(decision_database, source, message, now)
         return message
 
 def run_all_public_daily_updates(history_database: Path, imports_directory: Path, archive_directory: Path, decision_database: Path | None = None) -> str:
     """Update the free TWSE/TPEx all-stock daily snapshots and verify archives."""
     automatic = [source for source in SCHEDULES if source.startswith(("TWSE", "TPEx", "VIX"))]
     manual_only = [source for source in SCHEDULES if source.startswith(("TAIFEX",))]
-    results=[run_manual_update(source,history_database,imports_directory,archive_directory) for source in automatic]
+    results=[run_manual_update(source,history_database,imports_directory,archive_directory,decision_database) for source in automatic]
     results.extend(f"{source}：需要官方下載檔匯入，未寫入資料" for source in manual_only)
     try:
         security_catalog.upsert_sectors(history_database, security_catalog.parse_company_basic_info(security_catalog.fetch_company_basic_info()))
@@ -146,8 +167,22 @@ def run_all_public_daily_updates(history_database: Path, imports_directory: Path
         update_revenue_snapshots(history_database)
     except Exception:
         pass  # Monthly revenue is supplementary; never let it fail the whole daily update.
-    errors=verify_archive(history_database)
+    errors=_verify_archive_safe(history_database)
     return "；".join(results)+("；封存驗證失敗："+"、".join(errors) if errors else "；封存驗證通過")
+
+def _verify_archive_safe(history_database: Path) -> list[str]:
+    """verify_archive can itself raise -- a corrupted gzip header or a
+    permission error during hashing -- rather than returning an error list;
+    historical_storage.verify_archive has no try/except around its per-file
+    work. Confirmed: an unguarded call here previously meant one bad archived
+    file could abort run_startup_check entirely before GAP/REVERSAL/DRIFT/
+    MARKET_INDEX ever ran. Treat a raised exception the same as a returned
+    error -- something is wrong with the archive either way."""
+    try:
+        return verify_archive(history_database)
+    except Exception as error:
+        return [f"驗證過程發生例外：{type(error).__name__}：{error}"]
+
 
 def run_startup_check(history_database: Path, imports_directory: Path, archive_directory: Path, now: datetime | None = None, decision_database: Path | None = None) -> str:
     """Skip downloads when today's scheduled public files are already verified."""
@@ -174,16 +209,18 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
         # corruption keeps getting re-flagged on every launch until fixed.
         archive_errors: list[str] = []
     else:
-        archive_errors = verify_archive(history_database)
+        archive_errors = _verify_archive_safe(history_database)
         record_status(
             history_database, archive_source,
             "成功" if not archive_errors else "失敗",
             "封存驗證通過" if not archive_errors else f"封存驗證失敗：{'、'.join(archive_errors)}",
             now,
         )
+        if archive_errors:
+            _notify_data_update_failure(decision_database, archive_source, "、".join(archive_errors), now)
     if archive_errors: result = run_all_public_daily_updates(history_database,imports_directory,archive_directory,decision_database)
     elif not due: result = "歷史資料已通過封存驗證，且未到下一個更新時間；跳過下載。"
-    else: result = "；".join(run_manual_update(source,history_database,imports_directory,archive_directory) for source in due)
+    else: result = "；".join(run_manual_update(source,history_database,imports_directory,archive_directory,decision_database) for source in due)
     gap_source = "GAP 個股缺口補齊"
     if gap_source not in completed:
         gap_result = _catch_up_tracked_symbols_gap(history_database, imports_directory, archive_directory, decision_database, now)
@@ -200,6 +237,7 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
             result = f"{result}；{message}"
         except Exception as error:
             record_status(history_database, reversal_source, "失敗", f"短期反彈檢查失敗：{error}", now)
+            _notify_data_update_failure(decision_database, reversal_source, str(error), now)
 
     drift_source = "DRIFT 配置偏離檢查"
     if drift_source not in completed and decision_database is not None:
@@ -211,6 +249,7 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
             result = f"{result}；{message}"
         except Exception as error:
             record_status(history_database, drift_source, "失敗", f"配置偏離檢查失敗：{error}", now)
+            _notify_data_update_failure(decision_database, drift_source, str(error), now)
 
     market_index_source = "MARKET_INDEX 大盤櫃買指數"
     if market_index_source not in completed:
@@ -270,4 +309,5 @@ def _catch_up_tracked_symbols_gap(history_database: Path, imports_directory: Pat
         return message
     except Exception as error:
         record_status(history_database, "GAP 個股缺口補齊", "失敗", f"個股缺口補齊失敗：{error}", now)
+        _notify_data_update_failure(decision_database, "GAP 個股缺口補齊", str(error), now)
         return ""

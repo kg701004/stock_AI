@@ -55,6 +55,7 @@ class FactorScoreApp(ttk.Frame):
         super().__init__(master, padding=12)
         self.symbol: str | None = None
         self._technical_score: float | None = None
+        self._factor_notes: dict[str, str] = {}
         self.values = {name: tk.IntVar(value=50) for name in MANUAL_FACTOR_NAMES}
         self.risk_value = tk.IntVar(value=30)
         self._build()
@@ -141,11 +142,22 @@ class FactorScoreApp(ttk.Frame):
         # Factors with a real local/live data source -- always overwrite with
         # a fresh suggestion rather than leaving a stale saved value or the
         # generic neutral default.
+        #
+        # Every scorer's note is kept in self._factor_notes and persisted on
+        # save (previously save() passed {}, discarding all of these) -- a
+        # factor left at 50 purely because a scorer returned None for
+        # "insufficient data" was otherwise indistinguishable from a factor
+        # a person genuinely assessed as neutral. The None case is also now
+        # surfaced immediately in the status text, not just silently dropped.
         suggestion_notes = []
+        self._factor_notes = {}
         for name, scorer in AUTO_SUGGESTED_FACTOR_SCORERS.items():
             score_value, note = scorer(storage_paths()["history_database"], symbol)
+            self._factor_notes[name] = note
             if score_value is not None:
                 self.values[name].set(int(round(score_value))); suggestion_notes.append(note)
+            else:
+                suggestion_notes.append(f"{MANUAL_FACTOR_LABELS[name]}：{note}（維持目前數值，非自動評分）")
         self.status.configure(text=status_text + ("\n" + " ".join(suggestion_notes) if suggestion_notes else ""))
         self._render_charts()
 
@@ -155,7 +167,7 @@ class FactorScoreApp(ttk.Frame):
         try:
             save_factor_scores(
                 storage_paths()["decision_database"], self.symbol, datetime.now().astimezone(),
-                {name: float(var.get()) for name, var in self.values.items()}, float(self.risk_value.get()), {},
+                {name: float(var.get()) for name, var in self.values.items()}, float(self.risk_value.get()), self._factor_notes,
             )
             self.status.configure(text=f"{self.symbol} 的評分已儲存。下次重新分析時將套用。")
             self._render_charts()

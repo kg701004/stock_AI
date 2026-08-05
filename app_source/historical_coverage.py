@@ -63,8 +63,13 @@ def check_coverage(database: Path, symbol: str, years: int = 10, as_of: date | N
         # same except below as "table not created yet", so a real backfill
         # in progress could misreport as "run an import first".
         with database_connection(database) as connection:
+            # DISTINCT matters: daily_bars' primary key is (symbol, trading_date,
+            # source), so the same calendar date can legitimately have more than
+            # one row when both a regular import and a backfill import (different
+            # source strings) cover it. Counting raw rows would double-count
+            # those dates and could mislabel a year as complete when it isn't.
             rows = connection.execute(
-                "SELECT trading_date FROM daily_bars WHERE symbol = ? ORDER BY trading_date", (symbol,)
+                "SELECT DISTINCT trading_date FROM daily_bars WHERE symbol = ? ORDER BY trading_date", (symbol,)
             ).fetchall()
     except sqlite3.OperationalError:
         return HistoryCoverage(symbol, years, None, None, 0, (), target_years, False, "歷史資料表尚未建立；請先匯入日線資料。")

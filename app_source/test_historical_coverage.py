@@ -72,6 +72,34 @@ class HistoricalCoverageTests(unittest.TestCase):
         self.assertIn("2024", report.message)
         self.assertIn("上市", report.message)  # still notes the pre-IPO years separately
 
+    def test_duplicate_source_rows_for_the_same_date_are_not_double_counted(self) -> None:
+        """Regression test: the real daily_bars primary key is
+        (symbol, trading_date, source), so the same calendar date can
+        legitimately have more than one row -- e.g. a regular daily import
+        plus a backfill import with a different source string. check_coverage
+        used to count raw rows with no DISTINCT, so 100 real trading days
+        each duplicated once (200 rows) could misreport a year as complete
+        (>= the 200-bar threshold) when only 100 distinct trading days
+        actually exist -- contradicting the module's own docstring promise
+        that it "never labels a symbol as ten-year ready merely because some
+        rows exist"."""
+        database = self._database_path("duplicate_source_rows")
+        connection = sqlite3.connect(database)
+        try:
+            connection.execute("CREATE TABLE daily_bars (symbol TEXT, trading_date TEXT)")
+            for year in range(2016, 2026):
+                for day in range(1, 101):  # only 100 distinct trading days per year
+                    trading_date = date(year, 1, 1).fromordinal(date(year, 1, 1).toordinal() + day - 1).isoformat()
+                    connection.execute("INSERT INTO daily_bars VALUES (?, ?)", ("2330", trading_date))
+                    connection.execute("INSERT INTO daily_bars VALUES (?, ?)", ("2330", trading_date))  # duplicate row, same date
+            connection.commit()
+        finally:
+            connection.close()
+        report = check_coverage(database, "2330", 10, date(2026, 7, 22))
+        self.assertEqual(report.total_bars, 1000)  # 100 distinct dates x 10 years, not 2000 raw rows
+        self.assertFalse(report.ready_for_backtest)
+        self.assertEqual(report.missing_years, tuple(range(2016, 2026)))
+
     def test_missing_database_and_invalid_symbol_are_safe(self) -> None:
         database = self._database_path("missing")
         report = check_coverage(database, "2330", 10, date(2026, 7, 22))

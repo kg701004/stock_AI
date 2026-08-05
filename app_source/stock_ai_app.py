@@ -293,7 +293,20 @@ class DataManagementFrame(ttk.Frame):
     def _backfill_symbols_list(self) -> list[str]:
         text = self.backfill_symbols.get().strip()
         if text:
-            return [part.strip() for part in text.split(",") if part.strip()]
+            # Every other symbol entry point in the app (watchlist, ledger,
+            # historical_storage) enforces the four-digit Taiwan stock code
+            # format before it reaches any filesystem/URL construction; this
+            # free-text field previously didn't, so a stray typo or a pasted
+            # non-code string would flow unvalidated into a downstream
+            # backfill filename (historical_backfill.py/twse_daily_importer.py
+            # write directly under imports_directory with no containment
+            # check) and an unencoded query-string fetch.
+            candidates = [part.strip() for part in text.split(",") if part.strip()]
+            valid = [symbol for symbol in candidates if symbol.isdigit() and len(symbol) == 4]
+            invalid = [symbol for symbol in candidates if not (symbol.isdigit() and len(symbol) == 4)]
+            if invalid:
+                self.backfill_status.configure(text=f"已略過格式不正確的代號（需為4位數字）：{'、'.join(invalid)}")
+            return valid
         holdings_symbols = {item.symbol for item in calculate_holdings(self.paths["decision_database"])}
         watchlist_symbols = {item.symbol for item in list_items(self.paths["decision_database"])}
         return sorted(holdings_symbols | watchlist_symbols)
@@ -895,6 +908,18 @@ class NotificationCenterFrame(ttk.Frame):
             return "error"
         return "neutral"
 
+    @staticmethod
+    def _record_engine_failure(decision_db, check_name: str, error: Exception, now: datetime) -> None:
+        """The tab's own copy claims triggers are 'never missed' -- that was
+        only true while the check functions themselves never raised. A bad
+        config file, a locked DB, or a schema drift would previously vanish
+        into a bare `except: pass` with zero trace anywhere. Best-effort: a
+        failure to log the failure must still never crash the periodic scan."""
+        try:
+            record_notification(decision_db, "notification_engine_failure", "", f"{check_name}檢查失敗：{type(error).__name__}：{error}", now)
+        except Exception:
+            pass
+
     def check_now(self) -> None:
         fired_all = []
         now = datetime.now().astimezone()
@@ -904,22 +929,22 @@ class NotificationCenterFrame(ttk.Frame):
         try:
             fired_wl = check_watchlist_triggers(decision_db, now)
             fired_all.extend(fired_wl)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_engine_failure(decision_db, "自選股觸價", error, now)
 
         try:
             from notification_center import check_short_term_reversal_triggers
             fired_reversal = check_short_term_reversal_triggers(decision_db, history_db, now)
             fired_all.extend(fired_reversal)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_engine_failure(decision_db, "短期反彈", error, now)
 
         try:
             from notification_center import check_allocation_drift
             fired_drift = check_allocation_drift(decision_db, history_db, now=now)
             fired_all.extend(fired_drift)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_engine_failure(decision_db, "配置偏離", error, now)
 
         self.status.configure(text=f"檢查完成（{datetime.now().strftime('%H:%M:%S')}）：{f'發現 {len(fired_all)} 筆新觸發' if fired_all else '沒有新的觸發事件'}。")
         self.refresh()
@@ -939,20 +964,20 @@ class NotificationCenterFrame(ttk.Frame):
 
         try:
             check_watchlist_triggers(decision_db, now)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_engine_failure(decision_db, "自選股觸價", error, now)
 
         try:
             from notification_center import check_short_term_reversal_triggers
             check_short_term_reversal_triggers(decision_db, history_db, now)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_engine_failure(decision_db, "短期反彈", error, now)
 
         try:
             from notification_center import check_allocation_drift
             check_allocation_drift(decision_db, history_db, now=now)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_engine_failure(decision_db, "配置偏離", error, now)
 
         self.refresh()
         self._schedule_periodic_check()

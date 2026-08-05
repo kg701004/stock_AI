@@ -37,6 +37,31 @@ class TechnicalSignalTests(unittest.TestCase):
         self.assertEqual(signal.rsi14, 50.0)
         self.assertNotIn("過熱", " ".join(signal.reasons))
 
+    def test_fewer_than_21_bars_raises_instead_of_computing_a_score(self) -> None:
+        bars = [Bar(100 + index, 101 + index, 99 + index, 1000) for index in range(20)]
+        with self.assertRaises(ValueError):
+            calculate(bars)
+
+    def test_21_to_59_bars_warns_instead_of_faking_a_60_day_trend(self) -> None:
+        """Regression guard for the "資料少於 60 日" branch (technical_signal.py
+        calculate(), layers.ma60 is None): previously untested, so a
+        regression here (e.g. someone "fixing" the None check) would go
+        undetected even though it's exactly the history length a newly
+        tracked/recently listed stock has."""
+        bars = [Bar(100 + index, 101 + index, 99 + index, 1000) for index in range(45)]
+        signal = calculate(bars)
+        self.assertIsNotNone(signal.rsi14)  # RSI already computes at 45 bars; only ma60 is short
+        self.assertIn("資料少於 60 日", " ".join(signal.warnings))
+
+    def test_21_to_34_bars_warns_instead_of_faking_macd(self) -> None:
+        """Regression guard for the "資料不足，未計算 MACD" branch
+        (_macd_histogram requires 35+ closes): also previously untested."""
+        bars = [Bar(100 + index, 101 + index, 99 + index, 1000) for index in range(30)]
+        signal = calculate(bars)
+        self.assertIsNone(signal.macd_histogram)
+        self.assertIn("資料不足，未計算 MACD", " ".join(signal.warnings))
+        self.assertIn("資料少於 60 日", " ".join(signal.warnings))
+
     def test_validation_keeps_later_period_out_of_sample(self) -> None:
         bars = [Bar(100 + index * 0.5, 101 + index * 0.5, 99 + index * 0.5, 1000) for index in range(80)]
         inside, outside = validate(bars, threshold=0, holding_days=5)

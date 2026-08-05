@@ -538,3 +538,93 @@ class GuiSmokeTests(unittest.TestCase):
 
             finally:
                 root.destroy()
+
+    def test_saving_factor_scores_preserves_auto_suggested_notes(self):
+        """Regression test: save() used to pass {} for notes no matter what
+        lookup_symbol() had just suggested, discarding every "why" behind an
+        auto-suggested factor (including "insufficient data, kept at
+        neutral" disclosures) the moment a person clicked 儲存評分."""
+        from factor_score_store import load_symbol_factor_scores
+
+        base = Path("data/test_gui_factor_notes"); base.mkdir(parents=True, exist_ok=True)
+        paths = {"history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
+        paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
+
+        from security_catalog import upsert_from_daily_snapshot
+        upsert_from_daily_snapshot(paths["history_database"], [("6182", "合晶")], "TPEx", "2026-07-30T00:00:00")
+
+        with patch("stock_ai_app.storage_paths", return_value=paths), \
+             patch("holdings_manager.storage_paths", return_value=paths), \
+             patch("watchlist_app.storage_paths", return_value=paths), \
+             patch("factor_score_app.storage_paths", return_value=paths):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = StockAiApp(root); root.update_idletasks()
+                notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
+                score_frame = self._get_tab(notebook, "FactorScoreApp")
+                notebook.select(score_frame); root.update()
+
+                score_frame.query.delete(0, "end"); score_frame.query.insert(0, "6182")
+                score_frame.lookup_symbol(); score_frame.save()
+
+                _factors, _risk, notes = load_symbol_factor_scores(paths["decision_database"], "6182")
+                self.assertTrue(notes, "expected non-empty notes after saving auto-suggested scores")
+                self.assertIn("global_risk", notes)
+            finally:
+                root.destroy()
+
+    def test_manual_backfill_field_rejects_malformed_symbols(self):
+        """Regression test: the manual 回補 代號 free-text field was the only
+        symbol entry point with no four-digit format check -- a typo or a
+        pasted non-code string previously flowed straight into
+        _pending_backfill and on into a filename/URL built from it."""
+        base = Path("data/test_gui_backfill_validation"); base.mkdir(parents=True, exist_ok=True)
+        paths = {"history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
+        paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
+
+        with patch("stock_ai_app.storage_paths", return_value=paths), \
+             patch("holdings_manager.storage_paths", return_value=paths), \
+             patch("watchlist_app.storage_paths", return_value=paths):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = StockAiApp(root); root.update_idletasks()
+                notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
+                data_frame = self._get_tab(notebook, "DataManagementFrame")
+
+                data_frame.backfill_symbols.delete(0, "end")
+                data_frame.backfill_symbols.insert(0, "2330, ../../evil, 12, abcd")
+
+                symbols = data_frame._backfill_symbols_list()
+
+                self.assertEqual(symbols, ["2330"])
+                self.assertIn("../../evil", data_frame.backfill_status["text"])
+            finally:
+                root.destroy()
+
+    def test_notification_engine_failure_is_logged_not_silently_swallowed(self):
+        """Regression test: check_now()'s three scans each used to be a bare
+        `except Exception: pass` -- directly contradicting this tab's own
+        displayed claim that "事件仍完整記錄於下方清單，不會遺漏" (nothing is
+        ever missed). If the scan machinery itself breaks, that must be
+        discoverable too."""
+        base = Path("data/test_gui_notification_engine_failure"); base.mkdir(parents=True, exist_ok=True)
+        paths = {"history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
+        paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
+
+        with patch("stock_ai_app.storage_paths", return_value=paths), \
+             patch("holdings_manager.storage_paths", return_value=paths), \
+             patch("watchlist_app.storage_paths", return_value=paths), \
+             patch("stock_ai_app.check_watchlist_triggers", side_effect=RuntimeError("boom")):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = StockAiApp(root); root.update_idletasks()
+                notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
+                notification_frame = self._get_tab(notebook, "NotificationCenterFrame")
+
+                notification_frame.check_now()
+                root.update()
+
+                records = list_notifications(paths["decision_database"])
+                self.assertTrue(any(r.category == "notification_engine_failure" for r in records))
+            finally:
+                root.destroy()

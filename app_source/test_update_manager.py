@@ -44,6 +44,29 @@ class UpdateManagerTests(unittest.TestCase):
         self.assertEqual(status.status, "失敗")
         self.assertIn("simulated TWSE outage", status.detail)
 
+    def test_run_manual_update_notifies_decision_database_on_failure(self) -> None:
+        """Regression test: previously the automatic (non-button) call paths
+        into run_manual_update -- run_all_public_daily_updates and
+        run_startup_check's due-sources loop -- only ever wrote the failure
+        into data_update_status (invisible unless the user opened 資料管理).
+        The manual "更新" button already notified via its own caller; this
+        covers the optional decision_database parameter on run_manual_update
+        itself, used by the automatic paths."""
+        decision_database = Path("data/test_update_manual_update_decision.sqlite")
+        decision_database.unlink(missing_ok=True)
+        with patch("update_manager.fetch_twse", side_effect=RuntimeError("simulated TWSE outage")):
+            run_manual_update("TWSE 日行情", self.database, self.imports, self.archive, decision_database)
+        records = list_notifications(decision_database)
+        self.assertTrue(any(r.category == "data_update_failed" and r.symbol == "TWSE 日行情" for r in records))
+
+    def test_run_manual_update_without_decision_database_still_works(self) -> None:
+        """decision_database stays optional -- callers that don't pass it
+        (e.g. the manual-button call sites, which notify separately
+        themselves) must not break."""
+        with patch("update_manager.fetch_twse", side_effect=RuntimeError("simulated TWSE outage")):
+            message = run_manual_update("TWSE 日行情", self.database, self.imports, self.archive)
+        self.assertIn("更新失敗", message)
+
     def test_run_all_public_daily_updates_continues_after_one_source_fails(self) -> None:
         """A failure in one source (here: TWSE) must not stop the others
         (TPEx, VIX) from being attempted and recorded -- a partial update
@@ -226,3 +249,69 @@ class UpdateManagerTests(unittest.TestCase):
         finally:
             if decision_database.exists():
                 decision_database.unlink()
+
+    def test_verify_archive_raising_does_not_abort_the_rest_of_startup_check(self) -> None:
+        """Regression test: verify_archive() can itself raise (a corrupted
+        gzip header, a permission error) rather than returning an error
+        list -- historical_storage.verify_archive has no internal
+        try/except. Previously this was called unguarded in both
+        run_startup_check and run_all_public_daily_updates, so one bad
+        archived file would propagate out and abort the whole startup check
+        before REVERSAL/DRIFT/MARKET_INDEX ever ran. Must degrade to a
+        recorded failure instead."""
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
+        decision_database = Path("data/test_update_archive_exception_decision.sqlite")
+        decision_database.unlink(missing_ok=True)
+        with patch("update_manager.list_statuses", return_value=[]), \
+             patch("update_manager.verify_archive", side_effect=OSError("simulated corrupted gzip header")), \
+             patch("update_manager.run_manual_update", return_value="mocked"), \
+             patch("notification_center.check_short_term_reversal_triggers", return_value=[]), \
+             patch("notification_center.check_allocation_drift", return_value=[]), \
+             patch("update_manager.fetch_twse_index", return_value=None), \
+             patch("update_manager.fetch_tpex_index", return_value=[]):
+            # Must not raise.
+            result = run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
+        self.assertIsInstance(result, str)
+        statuses = {item.source: item.status for item in list_statuses(self.database)}
+        self.assertEqual(statuses["ARCHIVE 封存完整性驗證"], "失敗")
+        # The sources scheduled after the archive check must still have run.
+        self.assertEqual(statuses["REVERSAL 短期反彈檢查"], "成功")
+        self.assertEqual(statuses["DRIFT 配置偏離檢查"], "成功")
+        self.assertEqual(statuses["MARKET_INDEX 大盤櫃買指數"], "成功")
+        records = list_notifications(decision_database)
+        self.assertTrue(any(r.category == "data_update_failed" and r.symbol == "ARCHIVE 封存完整性驗證" for r in records))
+
+    def test_reversal_and_drift_failures_are_recorded_as_notifications(self) -> None:
+        """Regression test: REVERSAL/DRIFT exceptions previously only wrote
+        to data_update_status, unlike the ex-rights/market-index pattern
+        already fixed elsewhere in this module."""
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
+        decision_database = Path("data/test_update_reversal_drift_decision.sqlite")
+        decision_database.unlink(missing_ok=True)
+        with patch("update_manager.list_statuses", return_value=[]), \
+             patch("update_manager.verify_archive", return_value=[]), \
+             patch("update_manager.run_manual_update", return_value="mocked"), \
+             patch("notification_center.check_short_term_reversal_triggers", side_effect=RuntimeError("simulated reversal failure")), \
+             patch("notification_center.check_allocation_drift", side_effect=RuntimeError("simulated drift failure")), \
+             patch("update_manager.fetch_twse_index", return_value=None), \
+             patch("update_manager.fetch_tpex_index", return_value=[]):
+            run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
+        records = list_notifications(decision_database)
+        self.assertTrue(any(r.category == "data_update_failed" and r.symbol == "REVERSAL 短期反彈檢查" for r in records))
+        self.assertTrue(any(r.category == "data_update_failed" and r.symbol == "DRIFT 配置偏離檢查" for r in records))
+
+    def test_gap_catch_up_failure_is_recorded_as_a_notification(self) -> None:
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
+        decision_database = Path("data/test_update_gap_decision.sqlite")
+        decision_database.unlink(missing_ok=True)
+        with patch("update_manager.list_statuses", return_value=[]), \
+             patch("update_manager.verify_archive", return_value=[]), \
+             patch("update_manager.run_manual_update", return_value="mocked"), \
+             patch("notification_center.check_short_term_reversal_triggers", return_value=[]), \
+             patch("notification_center.check_allocation_drift", return_value=[]), \
+             patch("update_manager.fetch_twse_index", return_value=None), \
+             patch("update_manager.fetch_tpex_index", return_value=[]), \
+             patch("transaction_ledger.calculate_holdings", side_effect=RuntimeError("simulated ledger read failure")):
+            run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
+        records = list_notifications(decision_database)
+        self.assertTrue(any(r.category == "data_update_failed" and r.symbol == "GAP 個股缺口補齊" for r in records))
