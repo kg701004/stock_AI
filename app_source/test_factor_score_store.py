@@ -74,7 +74,13 @@ class FactorScoreStoreTests(unittest.TestCase):
         self.assertIn(SEEDED_NOTE_KEY, notes)
 
     def test_seed_default_factor_scores_uses_real_vix_and_volume_when_available(self) -> None:
-        import_vix(self.history_database, parse_fred_vix_csv(b"observation_date,VIXCLS\n2026-07-28,18.21\n"))
+        # global_risk_factor_score (sentiment_fear.py) needs at least 6 days
+        # of local VIX history to compute a real percentile/5-day-change
+        # score; fewer than that falls back to a neutral default.
+        import_vix(self.history_database, parse_fred_vix_csv(
+            b"observation_date,VIXCLS\n2026-07-21,16.0\n2026-07-22,16.5\n2026-07-23,17.0\n"
+            b"2026-07-24,17.5\n2026-07-27,18.0\n2026-07-28,18.21\n"
+        ))
         bars = [DailyBar("6182", date(2026, 7, 28), 84.0, 85.0, 83.0, 84.7, 20_000_000, "TEST", datetime(2026, 7, 28, tzinfo=timezone.utc))]
         csv_path = Path("data/test_factor_score_seed.csv")
         write_normalized_csv(bars, csv_path)

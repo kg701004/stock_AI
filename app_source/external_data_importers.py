@@ -57,41 +57,13 @@ def import_vix(database: Path, records: list[VixRecord], source: str = "FRED:VIX
     return len(records)
 
 
-def latest_vix(database: Path) -> tuple[float, date] | None:
-    """Return (value, trading_date) for the most recent locally stored VIX
-    observation, or None if vix_history is empty/missing."""
-    if not database.exists():
-        return None
-    with database_connection(database) as c:
-        c.execute("CREATE TABLE IF NOT EXISTS vix_history (trading_date TEXT PRIMARY KEY, value REAL NOT NULL, source TEXT NOT NULL, imported_at TEXT NOT NULL)")
-        row = c.execute("SELECT trading_date, value FROM vix_history ORDER BY trading_date DESC LIMIT 1").fetchone()
-    return None if row is None else (row[1], date.fromisoformat(row[0]))
-
-
-def global_risk_score_from_vix(vix: float) -> float:
-    """Map a VIX level to a 0-100 "global risk" factor score, following the
-    same higher-is-more-favorable convention as every other factor (a calm
-    market scores high, an elevated-fear market scores low).
-
-    Anchors follow common VIX interpretation bands: <=12 is a calm market
-    (score 100), >=40 is crisis-level fear (score 0, e.g. the 2020 selloff),
-    linear in between. This is a simple, disclosed heuristic, not a
-    statistically fitted model -- it exists to give a defensible starting
-    point the user can still override, not an authoritative signal.
-    """
-    low_vix, high_vix = 12.0, 40.0
-    ratio = (vix - low_vix) / (high_vix - low_vix)
-    return round(max(0.0, min(100.0, 100.0 - ratio * 100.0)), 1)
-
-
-def global_risk_factor_score(database: Path) -> tuple[float | None, str]:
-    """Return (score, note); score is None when there's no local VIX history yet."""
-    latest = latest_vix(database)
-    if latest is None:
-        return None, "尚無本機 VIX 資料，無法自動建議全球風險分數；請先執行一次「更新全部上市／上櫃並驗證」。"
-    vix, trading_date = latest
-    score = global_risk_score_from_vix(vix)
-    return score, f"依 {trading_date} VIX {vix:.2f} 自動建議（VIX 越低分數越高，僅供參考，可自行調整）。"
+## global_risk_factor_score/global_risk_score_from_vix/latest_vix moved to
+## sentiment_fear.py -- that version uses VIX historical percentile + 5-day
+## change (matching score_fear()'s real methodology) instead of this file's
+## simpler linear VIX-level mapping, and is now the single implementation
+## factor_score_app.py / factor_score_store.py both call. Keeping two
+## competing formulas for the same "global_risk" factor slot would let two
+## code paths in the app silently disagree about the same number.
 
 def _value(row: dict[str, str], *keys: str) -> float | None:
     for key in keys:
