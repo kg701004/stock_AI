@@ -24,6 +24,19 @@ class TechnicalSignalTests(unittest.TestCase):
         self.assertLess(signal.score, 65)
         self.assertIn("過熱", " ".join(signal.reasons))
 
+    def test_completely_flat_price_series_is_not_misread_as_overheated(self) -> None:
+        """Regression test: a price series with zero movement (gains ==
+        losses == 0, e.g. a thin/newly-listed stock or a data artifact
+        repeating the last close) used to hit the same `losses == 0` branch
+        as a genuine all-up move and return RSI 100 -- which calculate()
+        then flags as "過熱" (overheated) and caps the score at 60, actively
+        penalizing a stock that has shown zero momentum in either direction
+        for the wrong reason."""
+        bars = [Bar(100, 101, 99, 1000) for _ in range(65)]
+        signal = calculate(bars)
+        self.assertEqual(signal.rsi14, 50.0)
+        self.assertNotIn("過熱", " ".join(signal.reasons))
+
     def test_validation_keeps_later_period_out_of_sample(self) -> None:
         bars = [Bar(100 + index * 0.5, 101 + index * 0.5, 99 + index * 0.5, 1000) for index in range(80)]
         inside, outside = validate(bars, threshold=0, holding_days=5)

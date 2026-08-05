@@ -34,7 +34,12 @@ def _rsi(closes: list[float], period: int = 14) -> float | None:
     gains = mean([max(change, 0) for change in changes])
     losses = mean([max(-change, 0) for change in changes])
     if losses == 0:
-        return 100.0
+        # gains == losses == 0 means the price hasn't moved at all over the
+        # window (e.g. a thin/newly-listed stock, or a data artifact
+        # repeating the last close) -- that is flat, not strong, and must
+        # not read as RSI 100 (which calculate() treats as "overheated,
+        # don't chase"). Only a real all-up move with zero down days is 100.
+        return 100.0 if gains > 0 else 50.0
     return round(100 - 100 / (1 + gains / losses), 2)
 
 
