@@ -106,7 +106,7 @@ def run_manual_update(source: str, history_database: Path, imports_directory: Pa
         record_status(history_database, source, "失敗", message, now)
         return message
 
-def run_all_public_daily_updates(history_database: Path, imports_directory: Path, archive_directory: Path) -> str:
+def run_all_public_daily_updates(history_database: Path, imports_directory: Path, archive_directory: Path, decision_database: Path | None = None) -> str:
     """Update the free TWSE/TPEx all-stock daily snapshots and verify archives."""
     automatic = [source for source in SCHEDULES if source.startswith(("TWSE", "TPEx", "VIX"))]
     manual_only = [source for source in SCHEDULES if source.startswith(("TAIFEX",))]
@@ -121,8 +121,19 @@ def run_all_public_daily_updates(history_database: Path, imports_directory: Path
         # A rolling recent window: catches newly announced upcoming events and
         # keeps recently-passed ones current, without re-fetching all history daily.
         store_events(history_database, parse_ex_rights_events(fetch_ex_rights_events(today - timedelta(days=30), today + timedelta(days=30))))
-    except Exception:
-        pass  # Ex-dividend data is supplementary; never let it fail the whole daily update.
+    except Exception as error:
+        # Ex-dividend data is supplementary; never let it fail the whole daily
+        # update. But this used to be a bare "except: pass" -- if TWSE's
+        # ex-rights endpoint starts failing (confirmed live: it can return a
+        # bare 307 with no Location header), dividend-adjusted prices would
+        # silently go stale with zero visibility anywhere in the app. Record
+        # it so a persistent failure is at least discoverable in 通知中心.
+        if decision_database is not None:
+            try:
+                from notification_center import record_notification
+                record_notification(decision_database, "ex_rights_fetch_failed", "", f"除權息事件更新失敗（{type(error).__name__}）；除權息還原可能使用過期資料。", datetime.now().astimezone())
+            except Exception:
+                pass
     try:
         update_valuation_snapshots(history_database)
     except Exception:
@@ -145,7 +156,7 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
     # TAIFEX and VIX too); manual_only sources like TAIFEX have no automatic
     # fetcher and are filtered out below rather than duplicating their timing here.
     due=[source for source in due_sources(now, completed) if source.startswith(("TWSE","TPEx","VIX"))]
-    if verify_archive(history_database): result = run_all_public_daily_updates(history_database,imports_directory,archive_directory)
+    if verify_archive(history_database): result = run_all_public_daily_updates(history_database,imports_directory,archive_directory,decision_database)
     elif not due: result = "歷史資料已通過封存驗證，且未到下一個更新時間；跳過下載。"
     else: result = "；".join(run_manual_update(source,history_database,imports_directory,archive_directory) for source in due)
     gap_source = "GAP 個股缺口補齊"

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from notification_center import list_notifications
 from update_manager import list_statuses, record_status, run_all_public_daily_updates, run_manual_update
 
 
@@ -53,3 +54,23 @@ class UpdateManagerTests(unittest.TestCase):
         self.assertEqual(statuses["TWSE 日行情"], "失敗")
         self.assertEqual(statuses["TPEx 日行情"], "成功")
         self.assertEqual(statuses["VIX／全球風險"], "成功")
+
+    def test_ex_rights_fetch_failure_is_recorded_as_a_notification_not_silently_swallowed(self) -> None:
+        """Regression test: a failure fetching ex-dividend/ex-rights events
+        (confirmed live: TWSE's endpoint can return a bare 307) used to be a
+        bare "except: pass" -- dividend-adjusted prices could silently go
+        stale with zero visibility anywhere in the app. It must now be
+        recorded as a durable notification when a decision_database is
+        available, without breaking the rest of the daily update."""
+        decision_database = Path("data/test_update_status_decision.sqlite")
+        decision_database.unlink(missing_ok=True)
+        with patch("update_manager.fetch_ex_rights_events", side_effect=RuntimeError("simulated 307")):
+            summary = run_all_public_daily_updates(self.database, self.imports, self.archive, decision_database)
+        self.assertIsInstance(summary, str)  # the rest of the update still completes normally
+        records = list_notifications(decision_database)
+        self.assertTrue(any(r.category == "ex_rights_fetch_failed" for r in records))
+
+    def test_ex_rights_fetch_failure_does_not_crash_when_no_decision_database_is_given(self) -> None:
+        with patch("update_manager.fetch_ex_rights_events", side_effect=RuntimeError("simulated 307")):
+            summary = run_all_public_daily_updates(self.database, self.imports, self.archive)
+        self.assertIsInstance(summary, str)
