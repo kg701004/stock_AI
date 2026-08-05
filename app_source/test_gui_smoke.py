@@ -357,3 +357,63 @@ class GuiSmokeTests(unittest.TestCase):
                 self.assertIn("無錯誤", data_frame.integrity_status["text"])
             finally:
                 root.destroy()
+
+    def test_sample_data_warning_display(self):
+        """Test warning banner behaviour in PortfolioRiskFrame and HedgeAdviceFrame.
+
+        (a) When no real positions/current prices are available, a warning displaying
+            '示範資料' is shown.
+        (b) When real positions with current prices are available, the warning banner is cleared.
+        """
+        from transaction_ledger import add_transaction, set_current_price, Transaction, initialize
+
+        base = Path("data/test_gui_sample_warning"); base.mkdir(parents=True, exist_ok=True)
+        paths = {"history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
+        paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
+        initialize(paths["decision_database"])
+
+        with patch("stock_ai_app.storage_paths", return_value=paths), \
+             patch("holdings_manager.storage_paths", return_value=paths), \
+             patch("watchlist_app.storage_paths", return_value=paths):
+            root = tk.Tk(); root.withdraw()
+            try:
+                # Scenario A: empty database -> warning displays "示範資料"
+                app = StockAiApp(root)
+                root.update_idletasks()
+
+                notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
+                tabs = notebook.tabs()
+
+                # Tab index 2 is PortfolioDecisionFrame, which contains PortfolioRiskFrame and HedgeAdviceFrame inside its sub-notebook
+                decision_frame = notebook.nametowidget(tabs[2])
+                sub_notebook = next(child for child in decision_frame.winfo_children() if child.winfo_class() == "TNotebook")
+                sub_tabs = sub_notebook.tabs()
+                risk_frame = sub_notebook.nametowidget(sub_tabs[0])
+                hedge_frame = sub_notebook.nametowidget(sub_tabs[3])
+
+                # Force refresh to make sure
+                risk_frame.refresh()
+                hedge_frame.refresh()
+
+                self.assertTrue(risk_frame._using_sample_data)
+                self.assertIn("示範資料", risk_frame.sample_data_warn["text"])
+
+                self.assertTrue(hedge_frame._using_sample_data)
+                self.assertIn("示範資料", hedge_frame.sample_data_warn["text"])
+
+                # Scenario B: Add a real transaction and a current price -> warning should clear
+                t = Transaction(None, "OwnerA", "2330", datetime.now().astimezone(), "BUY", 1000, 500.0)
+                add_transaction(paths["decision_database"], t)
+                set_current_price(paths["decision_database"], "2330", 520.0, datetime.now().astimezone())
+
+                risk_frame.refresh()
+                hedge_frame.refresh()
+
+                self.assertFalse(risk_frame._using_sample_data)
+                self.assertEqual("", risk_frame.sample_data_warn["text"])
+
+                self.assertFalse(hedge_frame._using_sample_data)
+                self.assertEqual("", hedge_frame.sample_data_warn["text"])
+
+            finally:
+                root.destroy()
