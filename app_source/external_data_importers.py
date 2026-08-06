@@ -28,6 +28,8 @@ class VixRecord: trading_date: date; value: float
 class MopsFinancial: symbol: str; fiscal_year: int; fiscal_quarter: int; revenue: float | None; eps: float | None; gross_margin: float | None; operating_margin: float | None; roe: float | None; debt_ratio: float | None; source: str
 @dataclass(frozen=True, slots=True)
 class TaifexDaily: trading_date: date; contract: str; session: str; open_price: float | None; high_price: float | None; low_price: float | None; close_price: float | None; volume: int | None; open_interest: int | None
+@dataclass(frozen=True, slots=True)
+class InstitutionalFlow: trading_date: date; symbol: str; foreign_net_shares: int; trust_net_shares: int; dealer_net_shares: int; total_net_shares: int
 
 def initialize(database: Path) -> None:
     with database_connection(database) as c:
@@ -41,6 +43,16 @@ def initialize(database: Path) -> None:
             close_value REAL NOT NULL,
             imported_at TEXT NOT NULL,
             PRIMARY KEY(trading_date, market)
+        );
+        CREATE TABLE IF NOT EXISTS institutional_flow_history (
+            trading_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            foreign_net_shares INTEGER NOT NULL,
+            trust_net_shares INTEGER NOT NULL,
+            dealer_net_shares INTEGER NOT NULL,
+            total_net_shares INTEGER NOT NULL,
+            imported_at TEXT NOT NULL,
+            PRIMARY KEY(trading_date, symbol)
         );
         """)
 
@@ -200,6 +212,124 @@ def parse_taifex_daily_report(records: list[dict[str, object]]) -> list[TaifexDa
             _optional_int(row.get("Volume")),
             _optional_int(row.get("OpenInterest")),
         ))
+    return parsed
+
+
+TWSE_INSTITUTIONAL_FLOW_URL = "https://www.twse.com.tw/rwd/zh/fund/T86"
+
+
+def fetch_twse_institutional_flow_report(trading_date: date, timeout: int = 20) -> list[list[object]]:
+    """Fetch TWSE's daily "三大法人買賣超" (three major institutional
+    investors' net buy/sell) report for one date -- every listed security.
+
+    Live-verified 2026-08-06: unlike DailyMarketReportFut, this endpoint
+    genuinely supports historical per-date queries (confirmed: requesting
+    two different real past dates returned different row counts and each
+    response's own "date" field echoed back the requested date), so this
+    could support backfill later; only "today" is wired in for now, matching
+    the TAIFEX/market-index pattern.
+
+    Returns the raw "data" rows (each a list of strings, comma-formatted
+    numbers as text) exactly as TWSE returns them -- parse_twse_institutional_flow_report
+    does the conversion.
+
+    Raises: urllib.error.URLError, json.JSONDecodeError, etc. on network/parsing failure.
+    """
+    url = f"{TWSE_INSTITUTIONAL_FLOW_URL}?date={trading_date.strftime('%Y%m%d')}&selectType=ALL&response=json"
+    request = urllib.request.Request(url, headers={"User-Agent": "StockAI-local-research/1.0"})
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict) or payload.get("stat") != "OK":
+        return []
+    data = payload.get("data")
+    return data if isinstance(data, list) else []
+
+
+def parse_twse_institutional_flow_report(trading_date: date, records: list[list[object]]) -> list[InstitutionalFlow]:
+    """Convert raw T86 rows into InstitutionalFlow records.
+
+    Column layout confirmed live against a real response (index -> 中文欄位):
+    0 證券代號, 4 外陸資買賣超股數(不含外資自營商), 10 投信買賣超股數,
+    11 自營商買賣超股數(合計), 18 三大法人買賣超股數(合計).
+    Rows with a non-4-digit symbol (ETFs/warrants/etc share this endpoint)
+    or unparseable numbers are skipped rather than raising -- matching this
+    codebase's convention of tolerating a handful of malformed rows in a
+    market-wide snapshot instead of failing the whole import."""
+    parsed: list[InstitutionalFlow] = []
+    for row in records:
+        if not isinstance(row, list) or len(row) < 19:
+            continue
+        symbol = str(row[0]).strip()
+        if not symbol.isdigit() or len(symbol) != 4:
+            continue
+        foreign_net = _optional_int(row[4])
+        trust_net = _optional_int(row[10])
+        dealer_net = _optional_int(row[11])
+        total_net = _optional_int(row[18])
+        if None in (foreign_net, trust_net, dealer_net, total_net):
+            continue
+        parsed.append(InstitutionalFlow(trading_date, symbol, foreign_net, trust_net, dealer_net, total_net))
+    return parsed
+
+
+def import_institutional_flow(database: Path, records: list[InstitutionalFlow]) -> int:
+    initialize(database)
+    now = datetime.now().astimezone().isoformat()
+    with database_connection(database) as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO institutional_flow_history VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(x.trading_date.isoformat(), x.symbol, x.foreign_net_shares, x.trust_net_shares, x.dealer_net_shares, x.total_net_shares, now) for x in records],
+        )
+    return len(records)
+
+
+TPEX_INSTITUTIONAL_FLOW_URL = "https://www.tpex.org.tw/openapi/v1/tpex_3insti_daily_trading"
+
+
+def fetch_tpex_institutional_flow_report(timeout: int = 20) -> list[dict[str, object]]:
+    """Fetch TPEx's (上櫃) daily three-major-institutional-investors report.
+
+    Live-verified 2026-08-06: T86 (TWSE) only covers TWSE-listed symbols --
+    confirmed real by its absence for 6182 (合晶, a TPEx stock) in a live
+    T86 response -- this is the separate free, working TPEx endpoint that
+    actually has it. Like TPEx's other openapi endpoints already used in
+    this codebase (tpex_index, tpex_mainboard_daily_close_quotes), this only
+    returns the latest available day -- no date query parameter.
+
+    Raises: urllib.error.URLError, json.JSONDecodeError, etc. on network/parsing failure.
+    """
+    request = urllib.request.Request(TPEX_INSTITUTIONAL_FLOW_URL, headers={"User-Agent": "StockAI-local-research/1.0"})
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload if isinstance(payload, list) else []
+
+
+def parse_tpex_institutional_flow_report(records: list[dict[str, object]]) -> list[InstitutionalFlow]:
+    """Convert raw tpex_3insti_daily_trading rows into InstitutionalFlow
+    records. Field names confirmed live against a real response -- several
+    have inconsistent spacing (TPEx's own JSON keys, not a typo here), so
+    exact-match .get() calls are required rather than a cleaned-up guess."""
+    parsed: list[InstitutionalFlow] = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("SecuritiesCompanyCode", "")).strip()
+        if not symbol.isdigit() or len(symbol) != 4:
+            continue
+        date_str = str(row.get("Date", "")).strip()
+        try:
+            trading_date = _parse_roc_date(date_str)
+        except (ValueError, IndexError):
+            continue
+        foreign_net = _optional_int(row.get("ForeignInvestorsInclude MainlandAreaInvestors-Difference"))
+        trust_net = _optional_int(row.get("SecuritiesInvestmentTrustCompanies-Difference"))
+        dealer_net = _optional_int(row.get("Dealers-Difference"))
+        total_net = _optional_int(row.get("TotalDifference"))
+        if None in (foreign_net, trust_net, dealer_net, total_net):
+            continue
+        parsed.append(InstitutionalFlow(trading_date, symbol, foreign_net, trust_net, dealer_net, total_net))
     return parsed
 
 

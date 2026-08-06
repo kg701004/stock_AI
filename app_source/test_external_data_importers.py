@@ -3,7 +3,7 @@ import unittest
 import unittest.mock
 from datetime import date
 from pathlib import Path
-from external_data_importers import MopsFinancial, TaifexDaily, fetch_taifex_daily_report, import_mops, import_taifex, import_vix, parse_fred_vix_csv, parse_mops_csv, parse_mops_xbrl, parse_taifex_daily_report
+from external_data_importers import MopsFinancial, TaifexDaily, fetch_taifex_daily_report, import_mops, import_taifex, import_vix, parse_fred_vix_csv, parse_mops_csv, parse_mops_xbrl, parse_taifex_daily_report, InstitutionalFlow, fetch_twse_institutional_flow_report, parse_twse_institutional_flow_report, fetch_tpex_institutional_flow_report, parse_tpex_institutional_flow_report, import_institutional_flow
 
 class ExternalImporterTests(unittest.TestCase):
     def setUp(self): self.db = Path("data/test_external.sqlite")
@@ -115,3 +115,87 @@ class ExternalImporterTests(unittest.TestCase):
         self.assertEqual(rows[0], ("2026-01-05", "TPEx", 218.45))
         self.assertEqual(rows[1], ("2026-01-05", "TWSE", 48081.45))
         self.assertEqual(rows[2], ("2026-01-06", "TWSE", 48100.00))
+
+    def test_parse_twse_institutional_flow_report_extracts_correct_columns(self):
+        """Column layout confirmed live against a real T86 response: index 0
+        is the symbol, 4/10/11/18 are foreign/trust/dealer/total net shares."""
+        row = ["2330"] + ["0"] * 18
+        row[4] = "1,234"
+        row[10] = "-500"
+        row[11] = "100"
+        row[18] = "834"
+        parsed = parse_twse_institutional_flow_report(date(2026, 8, 5), [row])
+        self.assertEqual(parsed, [InstitutionalFlow(date(2026, 8, 5), "2330", 1234, -500, 100, 834)])
+
+    def test_parse_twse_institutional_flow_report_skips_malformed_rows(self):
+        raw = [
+            ["00", "0", "0", "0", "1,000"] + ["0"] * 14,  # 2-digit symbol (ETF/warrant), not a stock
+            ["2330"] + ["0"] * 3 + ["not-a-number"] + ["0"] * 14,  # unparseable numeric field
+            ["2330"] + ["0"] * 5,  # too short (< 19 columns)
+            "not a list",
+        ]
+        self.assertEqual(parse_twse_institutional_flow_report(date(2026, 8, 5), raw), [])
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_fetch_twse_institutional_flow_report_returns_data_rows(self, mock_urlopen):
+        mock_response = unittest.mock.MagicMock()
+        mock_response.read.return_value = b'{"stat": "OK", "date": "20260805", "data": [["2330", "0"]]}'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        records = fetch_twse_institutional_flow_report(date(2026, 8, 5))
+        self.assertEqual(records, [["2330", "0"]])
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_fetch_twse_institutional_flow_report_non_trading_day_returns_empty(self, mock_urlopen):
+        mock_response = unittest.mock.MagicMock()
+        mock_response.read.return_value = b'{"stat": "\xe6\xb2\x92\xe6\x9c\x89\xe8\xb3\x87\xe6\x96\x99"}'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        records = fetch_twse_institutional_flow_report(date(2026, 8, 5))
+        self.assertEqual(records, [])
+
+    def test_parse_tpex_institutional_flow_report_extracts_correct_fields(self):
+        """Field names confirmed live against a real tpex_3insti_daily_trading
+        response -- note the stray space in the "Include" key, which is TPEx's
+        own JSON key, not a typo here."""
+        row = {
+            "SecuritiesCompanyCode": "6182",
+            "Date": "1150806",
+            "ForeignInvestorsInclude MainlandAreaInvestors-Difference": "1,000",
+            "SecuritiesInvestmentTrustCompanies-Difference": "-200",
+            "Dealers-Difference": "50",
+            "TotalDifference": "850",
+        }
+        parsed = parse_tpex_institutional_flow_report([row])
+        self.assertEqual(parsed, [InstitutionalFlow(date(2026, 8, 6), "6182", 1000, -200, 50, 850)])
+
+    def test_parse_tpex_institutional_flow_report_skips_malformed_rows(self):
+        raw = [
+            {"SecuritiesCompanyCode": "00", "Date": "1150806"},  # not a 4-digit stock symbol
+            {"SecuritiesCompanyCode": "6182", "Date": "not-a-date"},  # unparseable date
+            {"SecuritiesCompanyCode": "6182", "Date": "1150806"},  # missing all the numeric fields
+            "not a dict",
+        ]
+        self.assertEqual(parse_tpex_institutional_flow_report(raw), [])
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_fetch_tpex_institutional_flow_report_returns_the_raw_json_list(self, mock_urlopen):
+        mock_response = unittest.mock.MagicMock()
+        mock_response.read.return_value = b'[{"SecuritiesCompanyCode": "6182"}]'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        records = fetch_tpex_institutional_flow_report()
+        self.assertEqual(records, [{"SecuritiesCompanyCode": "6182"}])
+
+    def test_import_institutional_flow(self):
+        records = [
+            InstitutionalFlow(date(2026, 8, 5), "2330", 1234, -500, 100, 834),
+            InstitutionalFlow(date(2026, 8, 5), "6182", 1000, -200, 50, 850),
+        ]
+        self.assertEqual(import_institutional_flow(self.db, records), 2)
+        with sqlite3.connect(self.db) as conn:
+            rows = conn.execute(
+                "SELECT trading_date, symbol, foreign_net_shares, trust_net_shares, dealer_net_shares, total_net_shares "
+                "FROM institutional_flow_history ORDER BY symbol"
+            ).fetchall()
+        self.assertEqual(rows, [
+            ("2026-08-05", "2330", 1234, -500, 100, 834),
+            ("2026-08-05", "6182", 1000, -200, 50, 850),
+        ])

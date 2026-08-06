@@ -12,7 +12,7 @@ from historical_storage import archive_and_import
 from historical_storage import verify_archive
 from tpex_daily_importer import fetch_current_daily_json as fetch_tpex, parse_daily_records as parse_tpex, extract_security_names as extract_tpex_names
 from twse_daily_importer import fetch_current_daily_json as fetch_twse, parse_daily_records as parse_twse, write_normalized_csv, extract_security_names as extract_twse_names
-from external_data_importers import fetch_fred_vix_csv, fetch_taifex_daily_report, fetch_tpex_index, fetch_twse_index, import_market_indices, import_taifex, import_vix, parse_fred_vix_csv, parse_taifex_daily_report
+from external_data_importers import fetch_fred_vix_csv, fetch_taifex_daily_report, fetch_tpex_index, fetch_tpex_institutional_flow_report, fetch_twse_index, fetch_twse_institutional_flow_report, import_institutional_flow, import_market_indices, import_taifex, import_vix, parse_fred_vix_csv, parse_taifex_daily_report, parse_tpex_institutional_flow_report, parse_twse_institutional_flow_report
 import security_catalog
 from dividend_adjustment import fetch_ex_rights_events, parse_ex_rights_events, store_events
 from fundamentals_data import update_revenue_snapshots
@@ -28,6 +28,7 @@ SCHEDULES = {
     "REVERSAL 短期反彈檢查": "開機時自動執行，每日至多一次",
     "DRIFT 配置偏離檢查": "開機時自動執行，每日至多一次",
     "MARKET_INDEX 大盤櫃買指數": "開機時自動執行，每日至多一次",
+    "INSTITUTIONAL_FLOW 三大法人買賣超": "開機時自動執行，每日至多一次",
     "ARCHIVE 封存完整性驗證": "開機時自動執行，每日至多一次",
 }
 
@@ -290,6 +291,24 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
                     record_notification(decision_database, "market_index_fetch_failed", "", f"大盤/櫃買指數更新失敗（{type(error).__name__}）；大盤情境因子可能使用過期或不足資料。", now)
                 except Exception:
                     pass
+
+    institutional_flow_source = "INSTITUTIONAL_FLOW 三大法人買賣超"
+    if institutional_flow_source not in completed:
+        # institutional_flow_factor_score reads institutional_flow_history --
+        # standalone here (like GAP/REVERSAL/DRIFT/MARKET_INDEX) for the same
+        # reason MARKET_INDEX is standalone: guarantees one real attempt per
+        # day regardless of whether TWSE/TPEx/VIX have anything due. TWSE's
+        # T86 covers 上市 symbols, TPEx's tpex_3insti_daily_trading covers
+        # 上櫃 symbols -- together they're the full market.
+        try:
+            twse_records = parse_twse_institutional_flow_report(now.date(), fetch_twse_institutional_flow_report(now.date()))
+            tpex_records = parse_tpex_institutional_flow_report(fetch_tpex_institutional_flow_report())
+            inserted = import_institutional_flow(history_database, twse_records + tpex_records)
+            message = f"三大法人買賣超更新完成，寫入 {inserted} 筆"
+            record_status(history_database, institutional_flow_source, "成功", message, now)
+        except Exception as error:
+            record_status(history_database, institutional_flow_source, "失敗", f"三大法人買賣超更新失敗：{error}", now)
+            _notify_data_update_failure(decision_database, institutional_flow_source, str(error), now)
 
     return result
 

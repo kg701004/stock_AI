@@ -76,6 +76,7 @@ def seed_default_factor_scores(decision_database: Path, history_database: Path, 
     if load_symbol_factor_scores(decision_database, symbol) is not None:
         return False
     from dividend_adjustment import events_factor_score
+    from institutional_flow import institutional_flow_factor_score
     from sentiment_fear import global_risk_factor_score
     from fundamentals_data import fundamentals_factor_score
     from market_breadth import market_breadth_factor_score, sector_rotation_factor_score
@@ -91,6 +92,7 @@ def seed_default_factor_scores(decision_database: Path, history_database: Path, 
         "sector_rotation": sector_rotation_factor_score(history_database, symbol),
         "events": events_factor_score(history_database, symbol, as_of.date()),
         "sentiment": market_context_factor_score(history_database),
+        "institutional_flow": institutional_flow_factor_score(history_database, symbol),
     }.items():
         if score is not None:
             factors[name] = score
