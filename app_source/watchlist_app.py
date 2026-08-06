@@ -71,7 +71,7 @@ class WatchlistApp(ttk.Frame):
         ttk.Button(bar,text="新增自選",style="Primary.TButton",command=self.add).pack(side="left",padx=(0,6))
         for label, fn in (("更新現價",self.update_price),("重新分析全部",self.reanalyse),("重新整理",self.refresh)): ttk.Button(bar,text=label,command=fn).pack(side="left",padx=(0,6))
         ttk.Button(bar,text="刪除",style="Danger.TButton",command=self.delete).pack(side="left",padx=(0,6))
-        ttk.Label(self,text="參考價由使用者填寫；目標價與停損價由目前現價、綜合分數與風險分數自動計算。停留在「判斷」欄一秒可查看條件；紅字＝停利、綠字＝停損（台股慣例）。",style="Muted.TLabel").pack(anchor="w",pady=(8,4))
+        ttk.Label(self,text="參考價由使用者填寫；目標價與停損價由目前現價、綜合分數與風險分數自動計算。判斷欄旁若出現「⚠」，代表實際判斷依據的「有效停損」（會取ATR波動、支撐位、均線裡最嚴格的一層）跟表格上顯示的停損價不同，停留在「判斷」欄一秒可查看實際依據與條件；紅字＝停利、綠字＝停損（台股慣例）。",style="Muted.TLabel").pack(anchor="w",pady=(8,4))
         cols=("id","symbol","name","current","reference","target","stop","score","decision"); self.table=ttk.Treeview(self,columns=cols,show="headings",height=12)
         for key,label in zip(cols,("ID","代號","名稱","現價","參考價","目標價","停損價","分數","判斷")): self.table.heading(key,text=label); self.table.column(key,width=100,anchor="center")
         self.table.pack(fill="both",expand=True); self.table.bind("<Motion>",self.hover); self.table.bind("<Leave>",lambda _:self.hide_tip())
@@ -184,10 +184,20 @@ class WatchlistApp(ttk.Frame):
         self.table.delete(*self.table.get_children()); prices=self.prices(); self.details={}
         for item in list_items(self.database):
             price=prices.get(item.symbol); pair=self.scores.get(item.symbol); score="—" if not pair else f"{pair[0].final_score:.1f}"
+            display_decision=None
             if price and pair:
                 tech=self.technical(item.symbol); confirmation=self.technical_confirmation(item.symbol); layered=evaluate_layers(LayeredInputs(price,item.reference_price,item.target_price,item.stop_price,atr_stop=None if tech is None else price-2*tech.atr,support=None if tech is None else tech.support,moving_average=None if tech is None else tech.ma20,event_risk=pair[1],technical_score=None if confirmation is None else confirmation.score)); decision=layered.action; technical_text="" if tech is None else f" ATR {tech.atr:.2f}、MA20 {tech.ma20:.2f}、支撐 {tech.support:.2f}、壓力 {tech.resistance:.2f}、相對量 {tech.relative_volume:.2f}、趨勢 {tech.regime}。"; confirmation_text=" 技術確認資料不足，未納入判斷。" if confirmation is None else f" 技術確認：{confirmation.status} {confirmation.score:.1f} 分。{' '.join(confirmation.reasons)}"; self.details[item.id]=f"{'; '.join(layered.triggers)}。有效停損 {layered.effective_stop:.2f}。分析分數 {pair[0].final_score:.1f}、風險分數 {pair[1]:.1f}。{technical_text}{confirmation_text}" + (" " + " ".join(layered.warnings) if layered.warnings else "") + (" " + " ".join(pair[0].warnings) if pair[0].warnings else "")
+                # The "停損價" column always shows the simple target-based
+                # stop -- but the 判斷 itself is driven by whichever of
+                # {base_stop, ATR, support, MA20} is tightest (layered.
+                # effective_stop). Confirmed real: a row can show 現價 well
+                # above 停損價 yet still read 停損, because a stricter layer
+                # (e.g. MA20) is the one actually binding -- with no visual
+                # cue the two numbers even disagree. Flag it inline instead
+                # of requiring a hover to discover the mismatch exists.
+                if abs(layered.effective_stop-item.stop_price)>0.01: display_decision=f"{decision} ⚠"
             else: decision="待輸入現價／評分"; self.details[item.id]="需有最新現價與因子評分後，才能提供目標價、停損價與判斷。"
-            self.table.insert("","end",tags=(self.DECISION_TAGS.get(decision,"neutral"),),values=(item.id,item.symbol,item.name,"—" if price is None else f"{price:.2f}",f"{item.reference_price:.2f}",f"{item.target_price:.2f}",f"{item.stop_price:.2f}",score,decision))
+            self.table.insert("","end",tags=(self.DECISION_TAGS.get(decision,"neutral"),),values=(item.id,item.symbol,item.name,"—" if price is None else f"{price:.2f}",f"{item.reference_price:.2f}",f"{item.target_price:.2f}",f"{item.stop_price:.2f}",score,display_decision or decision))
         for child in self.chart_area.winfo_children(): child.destroy()
         rows=[(item.symbol,{c.factor:c.raw_score for c in self.scores[item.symbol][0].contributions}) for item in list_items(self.database) if item.symbol in self.scores]
         if rows: factor_heatmap(self.chart_area,rows,FACTOR_LABELS)

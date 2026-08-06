@@ -15,7 +15,7 @@ import sqlite3
 import tkinter as tk
 import tkinter.ttk as ttk
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -209,6 +209,73 @@ class TooltipPositioningTests(unittest.TestCase):
                 self.assertGreaterEqual(tip_y, 0)
             finally:
                 app.hide_tip()
+                root.destroy()
+
+
+class EffectiveStopMismatchIconTests(unittest.TestCase):
+    """Regression test for a real usability finding: the 停損價 column always
+    shows the simple target-based stop, but the 判斷 verdict is actually
+    driven by whichever of {that stop, ATR, support, MA20} is tightest
+    (multi_layer_risk.evaluate's effective_stop). A row could show 現價 well
+    above 停損價 yet still read 停損 with zero visual indication the two
+    numbers even disagree -- confirmed live with 2330 (停損價 1967.75,
+    現價 2200, but 判斷=停損 because MA20=2325.25 was the binding layer)."""
+
+    def setUp(self) -> None:
+        self.base = Path("data/test_watchlist_stop_mismatch")
+        self.base.mkdir(parents=True, exist_ok=True)
+        self.paths = {
+            "history_database": self.base / "history.sqlite",
+            "decision_database": self.base / "decision.sqlite",
+            "raw_archive": self.base / "raw", "backups": self.base / "backups", "imports": self.base / "imports",
+        }
+        self.paths["history_database"].unlink(missing_ok=True)
+        self.paths["decision_database"].unlink(missing_ok=True)
+
+    def _seed(self, symbol: str, name: str, reference: float, target: float, stop: float, current_price: float, bars: list[float] | None) -> None:
+        from factor_score_store import seed_default_factor_scores
+        from watchlist_repository import add_item
+
+        upsert_from_daily_snapshot(self.paths["history_database"], [(symbol, name)], "TWSE", "2026-07-30T00:00:00")
+        if bars:
+            now = datetime(2026, 7, 30, tzinfo=timezone.utc)
+            daily_bars = [DailyBar(symbol, date(2026, 6, 1) + timedelta(days=i), b, b, b, b, 1_000_000, "TEST", now) for i, b in enumerate(bars)]
+            csv_path = self.paths["imports"]; csv_path.mkdir(parents=True, exist_ok=True); csv_path = csv_path / f"seed_{symbol}.csv"
+            write_normalized_csv(daily_bars, csv_path)
+            archive_and_import(csv_path, self.paths["history_database"], self.paths["raw_archive"])
+        add_item(self.paths["decision_database"], symbol, name, reference, target, stop, datetime.now().astimezone())
+        set_current_price(self.paths["decision_database"], symbol, current_price, datetime.now().astimezone())
+        seed_default_factor_scores(self.paths["decision_database"], self.paths["history_database"], symbol, datetime.now().astimezone())
+
+    def test_icon_shown_when_a_tighter_layer_overrides_the_displayed_stop(self) -> None:
+        # 25 flat bars at 2325 -> MA20/support/ATR-derived stop all land near
+        # 2325, well above the manually-set base stop of 1967.75 -- the same
+        # shape as the real 2330 case that surfaced this gap.
+        self._seed("2330", "台積電", reference=2390.0, target=2455.96, stop=1967.75, current_price=2200.0, bars=[2325.0] * 25)
+
+        with patch("watchlist_app.storage_paths", return_value=self.paths):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = watchlist_app.WatchlistApp(root)
+                app.refresh()
+                values = app.table.item(app.table.get_children()[0])["values"]
+                self.assertIn("⚠", str(values[8]), f"expected a mismatch icon in the 判斷 cell, got {values!r}")
+            finally:
+                root.destroy()
+
+    def test_no_icon_when_no_tighter_layer_is_available(self) -> None:
+        # No local daily bars at all -> ATR/support/MA20 stay None, so the
+        # effective stop can only ever equal the displayed base stop.
+        self._seed("2330", "台積電", reference=2390.0, target=2455.96, stop=1967.75, current_price=2200.0, bars=None)
+
+        with patch("watchlist_app.storage_paths", return_value=self.paths):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = watchlist_app.WatchlistApp(root)
+                app.refresh()
+                values = app.table.item(app.table.get_children()[0])["values"]
+                self.assertNotIn("⚠", str(values[8]), f"no mismatch exists here, got {values!r}")
+            finally:
                 root.destroy()
 
 
