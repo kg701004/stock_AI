@@ -200,7 +200,21 @@ class WatchlistApp(ttk.Frame):
         if not row or col != "#9": self.hide_tip(); return
         self.hide_tip(); self.tip_job=self.after(1000,lambda:self.show_tip(row,event.x_root,event.y_root))
     def show_tip(self,row,x,y):
-        item_id=int(self.table.item(row)["values"][0]); self.tooltip=tk.Toplevel(self); self.tooltip.wm_overrideredirect(True); self.tooltip.wm_geometry(f"+{x+12}+{y+12}"); ttk.Label(self.tooltip,text=self.details[item_id],background="#ffffe0",padding=6,wraplength=420).pack()
+        # An override-redirect window is never repositioned by the window
+        # manager to stay on-screen -- confirmed real: hovering the
+        # rightmost/lowest rows (e.g. "判斷" column, the last column) placed
+        # part of the tooltip past the screen edge, silently clipping the
+        # text with no visual indication anything was cut off. Flip to the
+        # other side of the cursor when the default placement would overflow.
+        item_id=int(self.table.item(row)["values"][0])
+        self.tooltip=tk.Toplevel(self); self.tooltip.wm_overrideredirect(True)
+        label=ttk.Label(self.tooltip,text=self.details[item_id],background="#ffffe0",padding=6,wraplength=420); label.pack()
+        self.tooltip.update_idletasks()
+        tip_width,tip_height=self.tooltip.winfo_reqwidth(),self.tooltip.winfo_reqheight()
+        screen_width,screen_height=self.tooltip.winfo_screenwidth(),self.tooltip.winfo_screenheight()
+        pos_x=x+12 if x+12+tip_width<=screen_width else max(0,x-12-tip_width)
+        pos_y=y+12 if y+12+tip_height<=screen_height else max(0,y-12-tip_height)
+        self.tooltip.wm_geometry(f"+{pos_x}+{pos_y}")
     def hide_tip(self):
         if self.tip_job:self.after_cancel(self.tip_job); self.tip_job=None
         if self.tooltip:self.tooltip.destroy(); self.tooltip=None

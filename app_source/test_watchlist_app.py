@@ -159,5 +159,58 @@ class AddDialogInitialDecisionTests(unittest.TestCase):
                 root.destroy()
 
 
+class TooltipPositioningTests(unittest.TestCase):
+    """Regression test for a real user report: hovering the "判斷" column
+    (the rightmost column) placed the explanation tooltip partly past the
+    screen edge, silently clipping the text -- an override-redirect Toplevel
+    is never repositioned by the window manager to stay on-screen, unlike a
+    normal window."""
+
+    def setUp(self) -> None:
+        self.base = Path("data/test_watchlist_tooltip")
+        self.base.mkdir(parents=True, exist_ok=True)
+        self.paths = {
+            "history_database": self.base / "history.sqlite",
+            "decision_database": self.base / "decision.sqlite",
+            "raw_archive": self.base / "raw", "backups": self.base / "backups", "imports": self.base / "imports",
+        }
+        self.paths["history_database"].unlink(missing_ok=True)
+        self.paths["decision_database"].unlink(missing_ok=True)
+        upsert_from_daily_snapshot(self.paths["history_database"], [("6182", "合晶")], "TPEx", "2026-07-30T00:00:00")
+        bars = [DailyBar("6182", date(2026, 7, 30), 84.0, 85.0, 83.0, 84.7, 20_000_000, "TEST", datetime(2026, 7, 30, tzinfo=timezone.utc))]
+        csv_path = self.paths["imports"]; csv_path.mkdir(parents=True, exist_ok=True); csv_path = csv_path / "seed.csv"
+        write_normalized_csv(bars, csv_path)
+        archive_and_import(csv_path, self.paths["history_database"], self.paths["raw_archive"])
+
+    def test_tooltip_flips_to_stay_within_the_screen_when_near_the_edge(self) -> None:
+        with patch("watchlist_app.storage_paths", return_value=self.paths):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = watchlist_app.WatchlistApp(root)
+                from watchlist_repository import add_item
+                add_item(self.paths["decision_database"], "6182", "合晶", 42.0, 42.0, 42.0, datetime.now().astimezone())
+                app.refresh()
+                row = app.table.get_children()[0]
+                item_id = int(app.table.item(row)["values"][0])
+                # A long detail string, matching the real length of an
+                # actual explanation (target/stop/risk/ATR/support/
+                # resistance/technical confirmation all concatenated).
+                app.details[item_id] = "現價跌破有效停損 1629.50。分數 51.2、風險分數 30.0。ATR 1425.00、壓力 1945.00、相對強勢。技術確認：技術偏多 68.0 分。柱體為正，短期動能偏強。" * 2
+
+                screen_width, screen_height = root.winfo_screenwidth(), root.winfo_screenheight()
+                app.show_tip(row, screen_width - 5, screen_height - 5)  # cursor pinned at the bottom-right corner
+                root.update_idletasks()
+
+                tip_x, tip_y = app.tooltip.winfo_x(), app.tooltip.winfo_y()
+                tip_width, tip_height = app.tooltip.winfo_width(), app.tooltip.winfo_height()
+                self.assertLessEqual(tip_x + tip_width, screen_width, "tooltip must not extend past the right edge of the screen")
+                self.assertLessEqual(tip_y + tip_height, screen_height, "tooltip must not extend past the bottom edge of the screen")
+                self.assertGreaterEqual(tip_x, 0)
+                self.assertGreaterEqual(tip_y, 0)
+            finally:
+                app.hide_tip()
+                root.destroy()
+
+
 if __name__ == "__main__":
     unittest.main()
