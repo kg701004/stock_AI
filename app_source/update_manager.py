@@ -12,7 +12,7 @@ from historical_storage import archive_and_import
 from historical_storage import verify_archive
 from tpex_daily_importer import fetch_current_daily_json as fetch_tpex, parse_daily_records as parse_tpex, extract_security_names as extract_tpex_names
 from twse_daily_importer import fetch_current_daily_json as fetch_twse, parse_daily_records as parse_twse, write_normalized_csv, extract_security_names as extract_twse_names
-from external_data_importers import fetch_fred_vix_csv, fetch_tpex_index, fetch_twse_index, import_market_indices, import_vix, parse_fred_vix_csv
+from external_data_importers import fetch_fred_vix_csv, fetch_taifex_daily_report, fetch_tpex_index, fetch_twse_index, import_market_indices, import_taifex, import_vix, parse_fred_vix_csv, parse_taifex_daily_report
 import security_catalog
 from dividend_adjustment import fetch_ex_rights_events, parse_ex_rights_events, store_events
 from fundamentals_data import update_revenue_snapshots
@@ -117,6 +117,17 @@ def run_manual_update(source: str, history_database: Path, imports_directory: Pa
             message = f"成功匯入 VIX {inserted} 筆"
             record_status(history_database, source, "成功", message, now)
             return message
+        elif source.startswith("TAIFEX"):
+            # Live-verified 2026-08-06: openapi.taifex.com.tw's
+            # DailyMarketReportFut is a real, free, working endpoint covering
+            # both trading sessions (regular + after-hours/夜盤) -- contrary
+            # to this project's earlier notes, night-session futures data
+            # does not actually require an official downloaded file.
+            parsed = parse_taifex_daily_report(fetch_taifex_daily_report())
+            inserted = import_taifex(history_database, parsed)
+            message = f"成功匯入 TAIFEX 日盤／盤後 {inserted} 筆"
+            record_status(history_database, source, "成功", message, now)
+            return message
         else:
             record_status(history_database, source, "尚未接入", "此來源的公開資料匯入器尚未完成；未寫入任何資料。", now)
             return "此來源的匯入器尚未完成。"
@@ -133,10 +144,11 @@ def run_manual_update(source: str, history_database: Path, imports_directory: Pa
 
 def run_all_public_daily_updates(history_database: Path, imports_directory: Path, archive_directory: Path, decision_database: Path | None = None) -> str:
     """Update the free TWSE/TPEx all-stock daily snapshots and verify archives."""
-    automatic = [source for source in SCHEDULES if source.startswith(("TWSE", "TPEx", "VIX"))]
-    manual_only = [source for source in SCHEDULES if source.startswith(("TAIFEX",))]
+    # TAIFEX moved from manual_only to automatic 2026-08-06: DailyMarketReportFut
+    # (openapi.taifex.com.tw) is a real, free, working endpoint -- confirmed live --
+    # covering both trading sessions, so it no longer needs an official downloaded file.
+    automatic = [source for source in SCHEDULES if source.startswith(("TWSE", "TPEx", "VIX", "TAIFEX"))]
     results=[run_manual_update(source,history_database,imports_directory,archive_directory,decision_database) for source in automatic]
-    results.extend(f"{source}：需要官方下載檔匯入，未寫入資料" for source in manual_only)
     try:
         security_catalog.upsert_sectors(history_database, security_catalog.parse_company_basic_info(security_catalog.fetch_company_basic_info()))
     except Exception:
@@ -191,10 +203,10 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
     from update_scheduler import due_sources
     now=now or datetime.now(ZoneInfo("Asia/Taipei")); statuses=list_statuses(history_database)
     completed={item.source for item in statuses if item.last_updated_at and item.last_updated_at.date()==now.date() and item.status=="成功"}
-    # due_sources() is the single, fully-tested schedule definition (covers
-    # TAIFEX and VIX too); manual_only sources like TAIFEX have no automatic
-    # fetcher and are filtered out below rather than duplicating their timing here.
-    due=[source for source in due_sources(now, completed) if source.startswith(("TWSE","TPEx","VIX"))]
+    # due_sources() is the single, fully-tested schedule definition. TAIFEX
+    # used to be excluded here (no automatic fetcher existed), but now has a
+    # real one (openapi.taifex.com.tw) -- see run_manual_update.
+    due=[source for source in due_sources(now, completed) if source.startswith(("TWSE","TPEx","VIX","TAIFEX"))]
     archive_source = "ARCHIVE 封存完整性驗證"
     if archive_source in completed:
         # Already verified clean today -- skip re-hashing every archived file.

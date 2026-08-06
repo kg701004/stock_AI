@@ -76,13 +76,15 @@ class UpdateManagerTests(unittest.TestCase):
         fake_vix_csv = b"observation_date,VIXCLS\n2026-06-01,15.50\n"
         with patch("update_manager.fetch_twse", side_effect=RuntimeError("simulated TWSE outage")), \
              patch("update_manager.fetch_tpex", return_value=fake_tpex_records), \
-             patch("update_manager.fetch_fred_vix_csv", return_value=fake_vix_csv):
+             patch("update_manager.fetch_fred_vix_csv", return_value=fake_vix_csv), \
+             patch("update_manager.fetch_taifex_daily_report", return_value=[]):
             summary = run_all_public_daily_updates(self.database, self.imports, self.archive)
         self.assertIn("更新失敗", summary)
         statuses = {item.source: item.status for item in list_statuses(self.database)}
         self.assertEqual(statuses["TWSE 日行情"], "失敗")
         self.assertEqual(statuses["TPEx 日行情"], "成功")
         self.assertEqual(statuses["VIX／全球風險"], "成功")
+        self.assertEqual(statuses["TAIFEX 夜盤"], "成功")
 
     def test_ex_rights_fetch_failure_is_recorded_as_a_notification_not_silently_swallowed(self) -> None:
         """Regression test: a failure fetching ex-dividend/ex-rights events

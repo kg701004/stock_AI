@@ -3,7 +3,7 @@ import unittest
 import unittest.mock
 from datetime import date
 from pathlib import Path
-from external_data_importers import MopsFinancial, TaifexDaily, import_mops, import_taifex, import_vix, parse_fred_vix_csv, parse_mops_csv, parse_mops_xbrl
+from external_data_importers import MopsFinancial, TaifexDaily, fetch_taifex_daily_report, import_mops, import_taifex, import_vix, parse_fred_vix_csv, parse_mops_csv, parse_mops_xbrl, parse_taifex_daily_report
 
 class ExternalImporterTests(unittest.TestCase):
     def setUp(self): self.db = Path("data/test_external.sqlite")
@@ -16,6 +16,48 @@ class ExternalImporterTests(unittest.TestCase):
         self.assertEqual(import_mops(self.db, csv_rows + xml_rows), 2)
     def test_taifex_night_session_is_persisted(self):
         self.assertEqual(import_taifex(self.db, [TaifexDaily(date(2026,1,2), "TX", "after_hours", 1,2,1,2,100,200)]), 1)
+
+    def test_parse_taifex_daily_report_distinguishes_contract_months_and_sessions(self):
+        """Regression guard: the real DailyMarketReportFut endpoint has
+        multiple rows sharing the same Contract code (near-month, next-month,
+        weeklies) -- if the contract month weren't folded into the stored id,
+        taifex_daily_reports' (trading_date, contract, session) primary key
+        would silently collapse them into one row via INSERT OR REPLACE."""
+        raw = [
+            {"Date": "20260805", "Contract": "TXF", "ContractMonth(Week)": "202608", "TradingSession": "一般",
+             "Open": "22,000", "High": "22,100", "Low": "21,900", "Last": "22,050", "Volume": "1,234", "OpenInterest": "5,678"},
+            {"Date": "20260805", "Contract": "TXF", "ContractMonth(Week)": "202609", "TradingSession": "一般",
+             "Open": "22,200", "High": "22,300", "Low": "22,100", "Last": "22,250", "Volume": "10", "OpenInterest": "20"},
+            {"Date": "20260805", "Contract": "TXF", "ContractMonth(Week)": "202608", "TradingSession": "盤後",
+             "Open": "22,060", "High": "22,150", "Low": "22,000", "Last": "22,100", "Volume": "300", "OpenInterest": ""},
+        ]
+        parsed = parse_taifex_daily_report(raw)
+        self.assertEqual(len(parsed), 3)
+        ids = {(p.contract, p.session) for p in parsed}
+        self.assertEqual(ids, {("TXF202608", "一般"), ("TXF202609", "一般"), ("TXF202608", "盤後")})
+        near_month_day = next(p for p in parsed if p.contract == "TXF202608" and p.session == "一般")
+        self.assertEqual(near_month_day.open_price, 22000.0)
+        self.assertEqual(near_month_day.volume, 1234)
+        night = next(p for p in parsed if p.session == "盤後")
+        self.assertIsNone(night.open_interest)  # blank string must become None, not crash or become 0
+        self.assertEqual(import_taifex(self.db, parsed), 3)
+
+    def test_parse_taifex_daily_report_skips_malformed_rows(self):
+        raw = [
+            {"Date": "not-a-date", "Contract": "TXF", "ContractMonth(Week)": "202608", "TradingSession": "一般"},
+            {"Date": "20260805", "Contract": "", "ContractMonth(Week)": "202608", "TradingSession": "一般"},
+            {"Date": "20260805", "Contract": "TXF", "ContractMonth(Week)": "202608", "TradingSession": ""},
+            "not a dict",
+        ]
+        self.assertEqual(parse_taifex_daily_report(raw), [])
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_fetch_taifex_daily_report_returns_the_raw_json_list(self, mock_urlopen):
+        mock_response = unittest.mock.MagicMock()
+        mock_response.read.return_value = b'[{"Date": "20260805", "Contract": "TXF"}]'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        records = fetch_taifex_daily_report()
+        self.assertEqual(records, [{"Date": "20260805", "Contract": "TXF"}])
 
     @unittest.mock.patch("urllib.request.urlopen")
     def test_fetch_twse_index_valid(self, mock_urlopen):

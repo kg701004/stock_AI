@@ -114,6 +114,95 @@ def import_taifex(database: Path, records: list[TaifexDaily]) -> int:
     return len(records)
 
 
+TAIFEX_DAILY_REPORT_URL = "https://openapi.taifex.com.tw/v1/DailyMarketReportFut"
+
+
+def fetch_taifex_daily_report(timeout: int = 20) -> list[dict[str, object]]:
+    """Fetch today's TAIFEX daily futures market report -- every contract,
+    both trading sessions ("一般"=regular day session, "盤後"=after-hours,
+    i.e. what's colloquially called 夜盤/night session).
+
+    Live-verified 2026-08-06: this is a real, free, working OpenAPI endpoint
+    with a TradingSession field distinguishing the two sessions (183 "盤後"
+    rows present in a real sample fetch) -- night-session futures data does
+    NOT actually require an official downloaded file, contrary to this
+    project's own earlier notes. Like TWSE/TPEx's own daily snapshot
+    endpoints already used elsewhere in this codebase, this only ever
+    returns the current day -- no historical range query.
+
+    Raises: urllib.error.URLError, json.JSONDecodeError, etc. on network/parsing failure.
+    """
+    request = urllib.request.Request(TAIFEX_DAILY_REPORT_URL, headers={"User-Agent": "StockAI-local-research/1.0"})
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload if isinstance(payload, list) else []
+
+
+def _optional_float(value: object) -> float | None:
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _optional_int(value: object) -> int | None:
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
+
+
+def parse_taifex_daily_report(records: list[dict[str, object]]) -> list[TaifexDaily]:
+    """Convert raw DailyMarketReportFut rows into TaifexDaily records.
+
+    The real API varies by contract code AND contract month/week (e.g. TXF's
+    near-month vs next-month vs weekly contracts all share the same
+    "Contract" code) -- folding the month into the stored contract id (e.g.
+    "TXF202608") keeps each distinct instrument from colliding under
+    taifex_daily_reports' (trading_date, contract, session) primary key,
+    which would otherwise silently overwrite all but one contract-month per
+    session per day.
+
+    Rows with an unparseable date, or missing contract/session, are skipped
+    rather than raising -- matching this codebase's convention of tolerating
+    a handful of malformed rows in a market-wide snapshot instead of failing
+    the whole import."""
+    parsed: list[TaifexDaily] = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        date_str = str(row.get("Date", "")).strip()
+        if len(date_str) != 8 or not date_str.isdigit():
+            continue
+        try:
+            trading_date = date(int(date_str[:4]), int(date_str[4:6]), int(date_str[6:8]))
+        except ValueError:
+            continue
+        contract = str(row.get("Contract", "")).strip()
+        session = str(row.get("TradingSession", "")).strip()
+        if not contract or not session:
+            continue
+        contract_month = str(row.get("ContractMonth(Week)", "")).strip()
+        contract_id = f"{contract}{contract_month}" if contract_month else contract
+        parsed.append(TaifexDaily(
+            trading_date, contract_id, session,
+            _optional_float(row.get("Open")),
+            _optional_float(row.get("High")),
+            _optional_float(row.get("Low")),
+            _optional_float(row.get("Last")),
+            _optional_int(row.get("Volume")),
+            _optional_int(row.get("OpenInterest")),
+        ))
+    return parsed
+
+
 def _parse_roc_date(date_str: str) -> date:
     date_str = date_str.strip()
     # Try splitting by "/" first
