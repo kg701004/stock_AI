@@ -55,6 +55,27 @@ def _number(value: object) -> float:
     return float(text)
 
 
+def record_trading_date(record: dict[str, object], fallback: date) -> date:
+    """Prefer the snapshot's own embedded ROC "Date" field over a caller-
+    supplied guess. Live-confirmed 2026-08-07: STOCK_DAY_ALL can lag behind
+    wall-clock "today" by more than one day (it returns whatever the most
+    recently published trading day is, not necessarily today's), and the
+    caller previously stamped every fetched record with `now.date()`
+    regardless -- silently mislabeling yesterday's (or older) OHLC as
+    today's for every symbol, every time the feed lagged. `fallback` exists
+    only for callers/tests without a "Date" field in their record."""
+    raw = record.get("Date")
+    if raw is None:
+        return fallback
+    digits = "".join(c for c in str(raw) if c.isdigit())
+    if len(digits) != 7:
+        return fallback
+    try:
+        return date(int(digits[:3]) + 1911, int(digits[3:5]), int(digits[5:]))
+    except ValueError:
+        return fallback
+
+
 def parse_daily_records(records: Iterable[dict[str, object]], trading_date: date, published_at: datetime) -> list[DailyBar]:
     """Normalize a TWSE daily snapshot into validated internal daily bars."""
     if published_at.tzinfo is None:
@@ -67,7 +88,7 @@ def parse_daily_records(records: Iterable[dict[str, object]], trading_date: date
         try:
             bars.append(DailyBar(
                 symbol=symbol,
-                trading_date=trading_date,
+                trading_date=record_trading_date(record, trading_date),
                 open_price=_number(record.get("OpeningPrice", record.get("開盤價"))),
                 high_price=_number(record.get("HighestPrice", record.get("最高價"))),
                 low_price=_number(record.get("LowestPrice", record.get("最低價"))),

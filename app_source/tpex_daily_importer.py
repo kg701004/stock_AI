@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 import certifi
 
 from historical_storage import DailyBar
-from twse_daily_importer import _number
+from twse_daily_importer import _number, record_trading_date
 
 
 TPEX_DAILY_QUOTES_URL = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
@@ -56,7 +56,7 @@ def parse_daily_records(records: Iterable[dict[str, object]], trading_date: date
             continue
         try:
             bars.append(DailyBar(
-                symbol, trading_date,
+                symbol, record_trading_date(record, trading_date),
                 _number(_field(record, "Open", "OpeningPrice", "開盤價")),
                 _number(_field(record, "High", "HighestPrice", "最高價")),
                 _number(_field(record, "Low", "LowestPrice", "最低價")),

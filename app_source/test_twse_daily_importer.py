@@ -32,6 +32,22 @@ class TwseDailyImporterTests(unittest.TestCase):
         self.assertEqual(len(bars), 1)
         self.assertEqual(bars[0].symbol, "0050")
 
+    def test_prefers_the_records_own_date_over_the_caller_supplied_guess(self) -> None:
+        """Regression guard: STOCK_DAY_ALL can lag behind wall-clock "today"
+        by more than one day (live-confirmed 2026-08-07) -- the caller used
+        to stamp every record with now.date() regardless, silently
+        mislabeling a stale day's OHLC as today's. Each record carries its
+        own ROC "Date" field ("1150805" = 2026-08-05); that must win over
+        whatever date the caller guessed."""
+        records = [{"Date": "1150805", "Code": "2330", "OpeningPrice": "2385.00", "HighestPrice": "2415.00", "LowestPrice": "2370.00", "ClosingPrice": "2405.00", "TradeVolume": "36,782,301"}]
+        bars = parse_daily_records(records, date(2026, 8, 6), datetime(2026, 8, 6, 14, 30, tzinfo=timezone.utc))
+        self.assertEqual(bars[0].trading_date, date(2026, 8, 5))
+
+    def test_falls_back_to_caller_supplied_date_when_record_has_no_date_field(self) -> None:
+        records = [{"Code": "2330", "OpeningPrice": "100", "HighestPrice": "101", "LowestPrice": "99", "ClosingPrice": "100", "TradeVolume": "1"}]
+        bars = parse_daily_records(records, date(2026, 7, 21), datetime(2026, 7, 21, 14, 30, tzinfo=timezone.utc))
+        self.assertEqual(bars[0].trading_date, date(2026, 7, 21))
+
     def test_requires_timezone(self) -> None:
         record = {"Code": "2330", "OpeningPrice": "100", "HighestPrice": "101", "LowestPrice": "99", "ClosingPrice": "100", "TradeVolume": "1"}
         with self.assertRaises(ValueError):

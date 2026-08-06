@@ -24,6 +24,13 @@ class TpexDailyImporterTests(unittest.TestCase):
         bars = parse_daily_records(records, date(2026, 7, 24), datetime(2026, 7, 24, 14, 30, tzinfo=timezone.utc))
         self.assertEqual((bars[0].symbol, bars[0].close_price, bars[0].volume), ("6182", 114.0, 20847262))
 
+    def test_prefers_the_records_own_date_over_the_caller_supplied_guess(self) -> None:
+        """Same lagging-feed risk as TWSE's STOCK_DAY_ALL: trust the
+        snapshot's own ROC "Date" field over a wall-clock guess."""
+        records = [{"Date": "1150806", "SecuritiesCompanyCode": "6182", "Open": "121.50", "High": "124.00", "Low": "114.00", "Close": "114.00", "TradingShares": "20847262"}]
+        bars = parse_daily_records(records, date(2026, 8, 7), datetime(2026, 8, 7, 14, 30, tzinfo=timezone.utc))
+        self.assertEqual(bars[0].trading_date, date(2026, 8, 6))
+
     def test_rejects_naive_timestamp(self) -> None:
         with self.assertRaises(ValueError):
             parse_daily_records([], date(2026, 7, 21), datetime(2026, 7, 21, 14, 30))
