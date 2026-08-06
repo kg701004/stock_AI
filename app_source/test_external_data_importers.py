@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import unittest
 import unittest.mock
@@ -73,6 +74,32 @@ class ExternalImporterTests(unittest.TestCase):
         self.assertEqual(val, 48081.45)
 
     @unittest.mock.patch("urllib.request.urlopen")
+    def test_fetch_twse_index_picks_taiex_by_label_not_position(self, mock_urlopen):
+        """Regression guard: MI_INDEX's first table lists 寶島股價指數
+        (a minor sub-index) at data[0] and the real TAIEX
+        (發行量加權股價指數, what "加權指數" means everywhere else) at
+        data[1] -- live-confirmed 2026-08-06/07 against the real endpoint,
+        which was silently importing 寶島股價指數's value as if it were
+        the TAIEX for as long as this function existed. Must match by
+        label across every row/table, never assume position."""
+        mock_response = unittest.mock.MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "tables": [
+                {"data": [
+                    ["寶島股價指數", "49,294.46"],
+                    ["發行量加權股價指數", "44,396.70"],
+                    ["臺灣公司治理100指數", "27,730.13"],
+                ]},
+                {"data": [["發行量加權股價報酬指數", "102,381.13"]]},
+            ]
+        }).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        from external_data_importers import fetch_twse_index
+        val = fetch_twse_index(date(2026, 8, 6))
+        self.assertEqual(val, 44396.70)
+
+    @unittest.mock.patch("urllib.request.urlopen")
     def test_fetch_twse_index_non_trading_day(self, mock_urlopen):
         # Mock response for non-trading day (empty tables/data)
         mock_response = unittest.mock.MagicMock()
@@ -82,6 +109,22 @@ class ExternalImporterTests(unittest.TestCase):
         from external_data_importers import fetch_twse_index
         val = fetch_twse_index(date(2026, 1, 4))
         self.assertIsNone(val)
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_fetch_tpex_index_handles_gregorian_dates(self, mock_urlopen):
+        """Regression guard: live-confirmed 2026-08-07 that tpex_index now
+        returns plain Gregorian YYYYMMDD ("20260803") rather than the ROC
+        format the code was written against -- _parse_roc_date raised on
+        every 8-digit date and fetch_tpex_index's per-row except-and-skip
+        silently swallowed it, so this endpoint had returned zero usable
+        rows since the feature was built."""
+        mock_response = unittest.mock.MagicMock()
+        mock_response.read.return_value = b'[{"Date": "20260803", "Close": "362.89"}, {"Date": "20260806", "Close": "391.37"}]'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        from external_data_importers import fetch_tpex_index
+        records = fetch_tpex_index()
+        self.assertEqual(records, [(date(2026, 8, 3), 362.89), (date(2026, 8, 6), 391.37)])
 
     @unittest.mock.patch("urllib.request.urlopen")
     def test_fetch_tpex_index(self, mock_urlopen):

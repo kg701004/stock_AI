@@ -334,14 +334,27 @@ def parse_tpex_institutional_flow_report(records: list[dict[str, object]]) -> li
 
 
 def _parse_roc_date(date_str: str) -> date:
+    """Parse a TPEx date string, which is ROC-format on some endpoints
+    (tpex_3insti_daily_trading: "1150806" / "112/10/25") but plain Gregorian
+    YYYYMMDD on others -- live-confirmed 2026-08-07: tpex_index now returns
+    "20260803" rather than the ROC format it used when fetch_tpex_index was
+    written, which silently zeroed out every TPEx index row forever (each
+    row raised ValueError here and was swallowed by fetch_tpex_index's own
+    per-row except-and-skip). An ROC year can never reach 4 digits, so an
+    unambiguous length/magnitude check disambiguates the two formats."""
     date_str = date_str.strip()
     # Try splitting by "/" first
     if "/" in date_str:
         parts = date_str.split("/")
         if len(parts) == 3:
-            return date(int(parts[0]) + 1911, int(parts[1]), int(parts[2]))
+            year = int(parts[0])
+            if len(parts[0]) == 4:  # already Gregorian, e.g. "2026/08/03"
+                return date(year, int(parts[1]), int(parts[2]))
+            return date(year + 1911, int(parts[1]), int(parts[2]))
     # Otherwise fall back to pure digits
     digits = "".join(c for c in date_str if c.isdigit())
+    if len(digits) == 8:
+        return date(int(digits[:4]), int(digits[4:6]), int(digits[6:]))
     if len(digits) == 7:
         return date(int(digits[:3]) + 1911, int(digits[3:5]), int(digits[5:]))
     elif len(digits) == 6:
@@ -375,20 +388,22 @@ def fetch_twse_index(trading_date: date, timeout: int = 20) -> float | None:
     if not tables or not isinstance(tables, list):
         return None
 
-    table = tables[0]
-    if not isinstance(table, dict) or "data" not in table:
-        return None
-
-    data = table["data"]
-    if not isinstance(data, list) or not data:
-        return None
-
-    first_row = data[0]
-    if not isinstance(first_row, list) or len(first_row) < 2:
-        return None
-
-    close_str = str(first_row[1]).strip()
-    return float(close_str.replace(",", ""))
+    # Must match by label, not position: live-confirmed 2026-08-07 that
+    # MI_INDEX's first table lists "寶島股價指數" (a minor sub-index) at
+    # data[0] and the actual TAIEX ("發行量加權股價指數", what "加權指數"
+    # means everywhere else) at data[1] -- blindly taking data[0] silently
+    # imported the wrong index into every downstream sentiment/market-context
+    # calculation since this function was written.
+    for table in tables:
+        if not isinstance(table, dict) or "data" not in table:
+            continue
+        data = table["data"]
+        if not isinstance(data, list):
+            continue
+        for row in data:
+            if isinstance(row, list) and len(row) >= 2 and str(row[0]).strip() == "發行量加權股價指數":
+                return float(str(row[1]).strip().replace(",", ""))
+    return None
 
 
 def fetch_tpex_index(timeout: int = 20) -> list[tuple[date, float]]:
