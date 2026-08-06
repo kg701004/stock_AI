@@ -146,7 +146,7 @@ class DataManagementFrame(ttk.Frame):
         self.table.tag_configure("muted", foreground=ui_theme.MUTED)
         self.table.pack(fill="x"); buttons = ttk.Frame(self); buttons.pack(anchor="w", pady=(8, 0)); self.all_update_button=ttk.Button(buttons, text="更新全部上市／上櫃並驗證", style="Primary.TButton", command=self.update_all_daily); self.all_update_button.pack(side="left", padx=(0, 6)); ttk.Button(buttons, text="手動更新選取來源", command=self.manual_update).pack(side="left", padx=(0, 6)); ttk.Button(buttons, text="重新整理", command=self.refresh).pack(side="left")
         self.progress=ttk.Progressbar(self,orient="horizontal",length=520,mode="determinate",maximum=4); self.progress.pack(anchor="w",pady=(8,0)); self.progress_status=ttk.Label(self,text="尚未開始更新"); self.progress_status.pack(anchor="w")
-        ttk.Label(self, text="TWSE、TPEx 使用公開日終資料；夜盤與 VIX 尚未接入，系統會如實標記。", foreground="#555555").pack(anchor="w", pady=(8, 0))
+        ttk.Label(self, text="TWSE、TPEx、TAIFEX 夜盤與 VIX 皆使用真實公開資料自動更新；尚未支援的來源系統會如實標記。", foreground="#555555").pack(anchor="w", pady=(8, 0))
 
         ttk.Label(self, text="歷史資料批次回補（支援 TWSE 上市／TPEx 上櫃）", font=("Microsoft JhengHei UI", 11, "bold")).pack(anchor="w", pady=(14, 4))
         scope_row = ttk.Frame(self); scope_row.pack(anchor="w")
