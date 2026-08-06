@@ -35,6 +35,7 @@ from historical_backfill import estimate_work, plan_pending_months, run_backfill
 from beta_hedge import CONTRACT_LABELS, CONTRACT_POINT_VALUES, suggest_hedge
 from hedge_positions import load_position as load_hedge_position, save_position as save_hedge_position
 from short_screening_app import ShortScreeningApp
+from stock_screener_app import StockScreenerApp
 from backtest_app import BacktestApp
 from historical_storage import verify_archive
 from watchlist_app import WatchlistApp
@@ -1023,7 +1024,7 @@ class StockAiApp(ttk.Frame):
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master); master.title("Stock AI 台股分析工具"); self.pack(fill="both", expand=True); notebook = ttk.Notebook(self); notebook.pack(fill="both", expand=True)
         self.data_management_frame = DataManagementFrame(notebook)
-        for frame, title in ((HoldingsManager(notebook), "📊 持股管理"), (WatchlistApp(notebook), "⭐ 自選追蹤"), (PortfolioDecisionFrame(notebook), "🛡 組合風險與配置"), (PositionAdviceFrame(notebook), "📋 個股建議"), (FactorScoreApp(notebook), "📝 個股評分輸入"), (PriceChartFrame(notebook), "📈 個股線圖"), (ShortScreeningApp(notebook), "📉 放空篩選（實驗性）"), (BacktestApp(notebook), "🧪 技術面回測驗證"), (self.data_management_frame, "🗄 資料管理"), (JudgementWeightFrame(notebook), "⚖ 判斷機制權重"), (NotificationCenterFrame(notebook), "🔔 通知中心")): notebook.add(frame, text=title)
+        for frame, title in ((HoldingsManager(notebook), "📊 持股管理"), (WatchlistApp(notebook), "⭐ 自選追蹤"), (PortfolioDecisionFrame(notebook), "🛡 組合風險與配置"), (PositionAdviceFrame(notebook), "📋 個股建議"), (FactorScoreApp(notebook), "📝 個股評分輸入"), (PriceChartFrame(notebook), "📈 個股線圖"), (StockScreenerApp(notebook), "🔍 選股（實驗性）"), (ShortScreeningApp(notebook), "📉 放空篩選（實驗性）"), (BacktestApp(notebook), "🧪 技術面回測驗證"), (self.data_management_frame, "🗄 資料管理"), (JudgementWeightFrame(notebook), "⚖ 判斷機制權重"), (NotificationCenterFrame(notebook), "🔔 通知中心")): notebook.add(frame, text=title)
         _refresh_active_tab_on_change(notebook)
 
     def run_startup_checks_in_background(self) -> None:

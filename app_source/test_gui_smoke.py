@@ -21,12 +21,12 @@ class GuiSmokeTests(unittest.TestCase):
     def test_dashboard_constructs_all_tabs(self):
         base = Path("data/test_gui_storage"); base.mkdir(parents=True, exist_ok=True)
         paths = {"history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
-        with patch("stock_ai_app.storage_paths", return_value=paths), patch("holdings_manager.storage_paths", return_value=paths), patch("watchlist_app.storage_paths", return_value=paths):
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), patch("holdings_manager.storage_paths", return_value=paths), patch("watchlist_app.storage_paths", return_value=paths):
             root = tk.Tk(); root.withdraw()
             try:
                 app = StockAiApp(root); root.update_idletasks()
                 notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
-                self.assertEqual(len(notebook.tabs()), 11)
+                self.assertEqual(len(notebook.tabs()), 12)
                 for tab in notebook.tabs(): notebook.select(tab); root.update_idletasks()
             finally:
                 root.destroy()
@@ -52,7 +52,7 @@ class GuiSmokeTests(unittest.TestCase):
         archive_and_import(csv_path, paths["history_database"], paths["raw_archive"])
         add_item(paths["decision_database"], "6182", "合晶", 42.0, 42.0, 42.0, datetime.now().astimezone())
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths), \
              patch("factor_score_app.storage_paths", return_value=paths):
@@ -93,7 +93,7 @@ class GuiSmokeTests(unittest.TestCase):
         write_normalized_csv(bars, csv_path)
         archive_and_import(csv_path, paths["history_database"], paths["raw_archive"])
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths):
             root = tk.Tk(); root.withdraw()
@@ -128,7 +128,7 @@ class GuiSmokeTests(unittest.TestCase):
         upsert_from_daily_snapshot(paths["history_database"], [("6182", "合晶")], "TPEx", "2026-07-30T00:00:00")
         add_item(paths["decision_database"], "6182", "合晶", 42.0, 42.0, 42.0, datetime.now().astimezone())
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths):
             root = tk.Tk(); root.withdraw()
@@ -176,7 +176,7 @@ class GuiSmokeTests(unittest.TestCase):
             progress_callback(3, 3, "BBBB 2026-01")  # BBBB now fully done too
             return BackfillSummary(3, 3, (), False)
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths), \
              patch("stock_ai_app.run_backfill", side_effect=fake_run_backfill), \
@@ -221,7 +221,7 @@ class GuiSmokeTests(unittest.TestCase):
         write_normalized_csv(bars, csv_path)
         archive_and_import(csv_path, paths["history_database"], paths["raw_archive"])
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths):
             root = tk.Tk(); root.withdraw()
@@ -257,7 +257,7 @@ class GuiSmokeTests(unittest.TestCase):
         paths = {"root": base, "history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
         paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths), \
              patch("stock_ai_app.DataManagementFrame._startup_check_worker", lambda self: None):
@@ -283,7 +283,7 @@ class GuiSmokeTests(unittest.TestCase):
         paths = {"root": base, "history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
         paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths), \
              patch("stock_ai_app.verify_and_cache", return_value="測試費率結果"), \
@@ -312,7 +312,7 @@ class GuiSmokeTests(unittest.TestCase):
         paths = {"root": base, "history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
         paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths), \
              patch("stock_ai_app.verify_and_cache", return_value="凱基費率頁格式未完整辨識；保留既有已驗證費率。"), \
@@ -332,7 +332,7 @@ class GuiSmokeTests(unittest.TestCase):
         paths = {"root": base, "history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
         paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths), \
              patch("stock_ai_app.verify_and_cache", return_value="凱基公開牌告費率已連線確認。"), \
@@ -360,7 +360,7 @@ class GuiSmokeTests(unittest.TestCase):
         # Two catalogued symbols, neither in holdings or watchlist.
         upsert_from_daily_snapshot(paths["history_database"], [("2330", "台積電"), ("6182", "合晶")], "TWSE", "2026-07-30T00:00:00")
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths):
             root = tk.Tk(); root.withdraw()
@@ -392,7 +392,7 @@ class GuiSmokeTests(unittest.TestCase):
         write_normalized_csv(bars, csv_path)
         archive_and_import(csv_path, paths["history_database"], paths["raw_archive"])
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths):
             root = tk.Tk(); root.withdraw()
@@ -423,7 +423,7 @@ class GuiSmokeTests(unittest.TestCase):
         paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
         initialize(paths["decision_database"])
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths):
             root = tk.Tk(); root.withdraw()
@@ -500,7 +500,7 @@ class GuiSmokeTests(unittest.TestCase):
         factors_2330 = {name: 95.0 for name in FACTOR_NAMES if name != "technical"}
         save_factor_scores(paths["decision_database"], "2330", now, factors_2330, 20.0, {"_note": "Test 2330"})
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths), \
              patch("factor_score_app.storage_paths", return_value=paths):
@@ -553,7 +553,7 @@ class GuiSmokeTests(unittest.TestCase):
         from security_catalog import upsert_from_daily_snapshot
         upsert_from_daily_snapshot(paths["history_database"], [("6182", "合晶")], "TPEx", "2026-07-30T00:00:00")
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths), \
              patch("factor_score_app.storage_paths", return_value=paths):
@@ -582,7 +582,7 @@ class GuiSmokeTests(unittest.TestCase):
         paths = {"history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
         paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths):
             root = tk.Tk(); root.withdraw()
@@ -611,7 +611,7 @@ class GuiSmokeTests(unittest.TestCase):
         paths = {"history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
         paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
 
-        with patch("stock_ai_app.storage_paths", return_value=paths), \
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
              patch("holdings_manager.storage_paths", return_value=paths), \
              patch("watchlist_app.storage_paths", return_value=paths), \
              patch("stock_ai_app.check_watchlist_triggers", side_effect=RuntimeError("boom")):
