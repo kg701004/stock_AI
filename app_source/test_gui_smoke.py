@@ -628,3 +628,38 @@ class GuiSmokeTests(unittest.TestCase):
                 self.assertTrue(any(r.category == "notification_engine_failure" for r in records))
             finally:
                 root.destroy()
+
+    def test_selecting_a_notification_shows_its_full_message(self):
+        """Regression test: a ttk.Treeview cell never wraps -- it silently
+        clips the rendered text to the column width while the full string
+        stays in the underlying model. A real same-day partial-update
+        failure message ("...更新失敗：The read operation timed out；封存驗
+        證通過") was fully present in notification_log but had no way to be
+        read from this tab, cut off mid-sentence with no visual indication
+        anything was missing."""
+        from notification_center import record_notification
+        from datetime import datetime as dt
+
+        base = Path("data/test_gui_notification_detail"); base.mkdir(parents=True, exist_ok=True)
+        paths = {"history_database": base / "history.sqlite", "decision_database": base / "decision.sqlite", "raw_archive": base / "raw", "backups": base / "backups", "imports": base / "imports"}
+        paths["history_database"].unlink(missing_ok=True); paths["decision_database"].unlink(missing_ok=True)
+
+        long_message = "全部日線更新：成功匯入 1092 筆資料；校驗值 19b1c1c957e7…；成功匯入 877 筆資料；校驗值 43e65a0159c4…；更新失敗：The read operation timed out；封存驗證通過"
+        record_notification(paths["decision_database"], "data_update", "ALL", long_message, dt.now().astimezone())
+
+        with patch("stock_ai_app.storage_paths", return_value=paths), patch("stock_screener_app.storage_paths", return_value=paths), \
+             patch("holdings_manager.storage_paths", return_value=paths), \
+             patch("watchlist_app.storage_paths", return_value=paths):
+            root = tk.Tk(); root.withdraw()
+            try:
+                app = StockAiApp(root); root.update_idletasks()
+                notebook = next(child for child in app.winfo_children() if child.winfo_class() == "TNotebook")
+                notification_frame = self._get_tab(notebook, "NotificationCenterFrame")
+
+                row = notification_frame.table.get_children()[0]
+                notification_frame.table.selection_set(row)
+                notification_frame.show_detail(None)
+
+                self.assertEqual(notification_frame.detail.get("1.0", "end").strip(), long_message)
+            finally:
+                root.destroy()

@@ -91,7 +91,7 @@ class FactorScoreApp(ttk.Frame):
         button_row = ttk.Frame(left); button_row.pack(anchor="w", pady=(14, 0))
         ttk.Button(button_row, text="儲存評分", style="Primary.TButton", command=self.save).pack(side="left")
         ttk.Button(button_row, text="重設為中性（50）", command=self.reset_to_neutral).pack(side="left", padx=(6, 0))
-        self.status = ttk.Label(left, text=""); self.status.pack(anchor="w", pady=4)
+        self.status = ttk.Label(left, text="", wraplength=460, justify="left"); self.status.pack(anchor="w", pady=4)
 
     def reset_to_neutral(self) -> None:
         """Quick escape hatch when starting a fresh assessment: every manual factor and risk back to the neutral midpoint."""

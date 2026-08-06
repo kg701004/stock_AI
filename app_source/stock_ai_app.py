@@ -896,8 +896,27 @@ class NotificationCenterFrame(ttk.Frame):
         self.table.tag_configure("error", foreground=ui_theme.ERROR)
         self.table.tag_configure("neutral", foreground=ui_theme.NEUTRAL)
         self.table.pack(fill="both", expand=True)
+        # A ttk.Treeview cell never wraps -- it silently clips the rendered
+        # text to the column width while still storing the full string
+        # underneath (confirmed real: a genuine same-day partial-update
+        # failure message, "...更新失敗：The read operation timed out；封存
+        # 驗證通過", was fully present in notification_log but had no way to
+        # be read from this tab, cut off mid-sentence at the column edge).
+        # This detail panel just re-displays the already-stored full value.
+        ttk.Label(self, text="選取一列可查看完整訊息：", style="Muted.TLabel").pack(anchor="w", pady=(8, 2))
+        self.detail = tk.Text(self, height=4, wrap="word", state="disabled")
+        self.detail.pack(fill="x")
+        self.table.bind("<<TreeviewSelect>>", self.show_detail)
         self.refresh()
         self._schedule_periodic_check()
+
+    def show_detail(self, _event: object) -> None:
+        selected = self.table.selection()
+        self.detail.configure(state="normal")
+        self.detail.delete("1.0", "end")
+        if selected:
+            self.detail.insert("1.0", self.table.item(selected[0])["values"][3])
+        self.detail.configure(state="disabled")
 
     @staticmethod
     def _row_tag(record) -> str:
