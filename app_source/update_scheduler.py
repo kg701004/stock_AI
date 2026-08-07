@@ -12,7 +12,7 @@ def _scheduled_time(source: str) -> time:
     # Not a market-hours job -- "due" the moment the app opens, any time of
     # day; due_sources' own completed_today check is what actually limits
     # this to at most once per real calendar day.
-    if source.startswith(("GAP", "REVERSAL", "DRIFT", "MARKET_INDEX", "INSTITUTIONAL_FLOW", "MARGIN_BALANCE", "SECTOR", "EX_RIGHTS", "VALUATION", "FUNDAMENTALS", "ARCHIVE")): return time(0)
+    if source.startswith(("GAP", "REVERSAL", "DRIFT", "MARKET_INDEX", "INSTITUTIONAL_FLOW", "MARGIN_BALANCE", "SECTOR", "EX_RIGHTS", "VALUATION", "FUNDAMENTALS", "FINANCIALS", "ARCHIVE")): return time(0)
     raise ValueError(f"unknown scheduled source: {source}")
 def due_sources(now: datetime, completed_today: set[str]) -> list[str]:
     if now.tzinfo is None: raise ValueError("now needs timezone")

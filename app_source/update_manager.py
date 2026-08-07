@@ -17,6 +17,7 @@ import security_catalog
 from dividend_adjustment import fetch_ex_rights_events, parse_ex_rights_events, store_events
 from fundamentals_data import update_revenue_snapshots
 from valuation_data import update_valuation_snapshots
+from twse_financial_importer import update_general_industry_financials
 
 
 SCHEDULES = {
@@ -34,6 +35,7 @@ SCHEDULES = {
     "EX_RIGHTS 除權息事件": "開機時自動執行，每日至多一次",
     "VALUATION 個股評價": "開機時自動執行，每日至多一次",
     "FUNDAMENTALS 月營收": "開機時自動執行，每日至多一次",
+    "FINANCIALS 財務報表(一般業)": "開機時自動執行，每日至多一次",
     "ARCHIVE 封存完整性驗證": "開機時自動執行，每日至多一次",
 }
 
@@ -374,6 +376,28 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
         except Exception as error:
             record_status(history_database, fundamentals_source, "失敗", f"月營收更新失敗：{error}", now)
             _notify_data_update_failure(decision_database, fundamentals_source, str(error), now)
+
+    financials_source = "FINANCIALS 財務報表(一般業)"
+    if financials_source not in completed:
+        # short_screening.py's financial-deterioration signal reads
+        # mops_financials, but nothing in this codebase had ever called
+        # import_mops automatically -- twse_financial_importer.py existed
+        # only as a manual-file-load path, called from nowhere else.
+        # Confirmed live 2026-08-07: mops_financials was 0 rows ever, so
+        # this signal had always returned "尚無財報資料" for every symbol.
+        # 一般業 (general industry) only for now -- financial holding/
+        # banking/securities/insurance each need their own separate
+        # endpoint with different field names, not yet covered. Coverage
+        # also grows over the ~45-day quarterly filing window rather than
+        # being complete immediately (confirmed live: only 176 of ~1,000+
+        # 一般業 companies had filed Q2 2026 as of this fix).
+        try:
+            inserted = update_general_industry_financials(history_database)
+            message = f"財務報表(一般業)更新完成，寫入 {inserted} 筆"
+            record_status(history_database, financials_source, "成功", message, now)
+        except Exception as error:
+            record_status(history_database, financials_source, "失敗", f"財務報表(一般業)更新失敗：{error}", now)
+            _notify_data_update_failure(decision_database, financials_source, str(error), now)
 
     return result
 
