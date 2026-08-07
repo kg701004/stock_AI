@@ -30,6 +30,10 @@ SCHEDULES = {
     "MARKET_INDEX 大盤櫃買指數": "開機時自動執行，每日至多一次",
     "INSTITUTIONAL_FLOW 三大法人買賣超": "開機時自動執行，每日至多一次",
     "MARGIN_BALANCE 融資融券餘額": "開機時自動執行，每日至多一次",
+    "SECTOR 產業分類": "開機時自動執行，每日至多一次",
+    "EX_RIGHTS 除權息事件": "開機時自動執行，每日至多一次",
+    "VALUATION 個股評價": "開機時自動執行，每日至多一次",
+    "FUNDAMENTALS 月營收": "開機時自動執行，每日至多一次",
     "ARCHIVE 封存完整性驗證": "開機時自動執行，每日至多一次",
 }
 
@@ -145,42 +149,26 @@ def run_manual_update(source: str, history_database: Path, imports_directory: Pa
         return message
 
 def run_all_public_daily_updates(history_database: Path, imports_directory: Path, archive_directory: Path, decision_database: Path | None = None) -> str:
-    """Update the free TWSE/TPEx all-stock daily snapshots and verify archives."""
+    """Update the free TWSE/TPEx all-stock daily snapshots and verify archives.
+
+    Sector classification, ex-rights events, valuation and monthly revenue
+    used to also be fetched here -- but this function is ONLY called from
+    run_startup_check's `if archive_errors:` branch, which is true only when
+    archive integrity verification finds actual corruption (vanishingly
+    rare in normal operation). Confirmed live 2026-08-07: this meant those
+    four updates had effectively never run in production -- securities.sector
+    was 0/1983 populated and valuation_snapshots/revenue_snapshots were
+    completely empty, exactly the same "nested inside a rarely-true branch"
+    bug MARKET_INDEX/INSTITUTIONAL_FLOW/MARGIN_BALANCE were already fixed
+    for. They are now standalone blocks in run_startup_check instead (see
+    SECTOR/EX_RIGHTS/VALUATION/FUNDAMENTALS below), guaranteeing one real
+    attempt per day regardless of the other sources' state.
+    """
     # TAIFEX moved from manual_only to automatic 2026-08-06: DailyMarketReportFut
     # (openapi.taifex.com.tw) is a real, free, working endpoint -- confirmed live --
     # covering both trading sessions, so it no longer needs an official downloaded file.
     automatic = [source for source in SCHEDULES if source.startswith(("TWSE", "TPEx", "VIX", "TAIFEX"))]
     results=[run_manual_update(source,history_database,imports_directory,archive_directory,decision_database) for source in automatic]
-    try:
-        security_catalog.upsert_sectors(history_database, security_catalog.parse_company_basic_info(security_catalog.fetch_company_basic_info()))
-    except Exception:
-        pass  # Sector classification is supplementary; never let it fail the whole daily update.
-    try:
-        today = datetime.now(ZoneInfo("Asia/Taipei")).date()
-        # A rolling recent window: catches newly announced upcoming events and
-        # keeps recently-passed ones current, without re-fetching all history daily.
-        store_events(history_database, parse_ex_rights_events(fetch_ex_rights_events(today - timedelta(days=30), today + timedelta(days=30))))
-    except Exception as error:
-        # Ex-dividend data is supplementary; never let it fail the whole daily
-        # update. But this used to be a bare "except: pass" -- if TWSE's
-        # ex-rights endpoint starts failing (confirmed live: it can return a
-        # bare 307 with no Location header), dividend-adjusted prices would
-        # silently go stale with zero visibility anywhere in the app. Record
-        # it so a persistent failure is at least discoverable in 通知中心.
-        if decision_database is not None:
-            try:
-                from notification_center import record_notification
-                record_notification(decision_database, "ex_rights_fetch_failed", "", f"除權息事件更新失敗（{type(error).__name__}）；除權息還原可能使用過期資料。", datetime.now().astimezone())
-            except Exception:
-                pass
-    try:
-        update_valuation_snapshots(history_database)
-    except Exception:
-        pass  # Valuation (PE/yield/PB) is supplementary; never let it fail the whole daily update.
-    try:
-        update_revenue_snapshots(history_database)
-    except Exception:
-        pass  # Monthly revenue is supplementary; never let it fail the whole daily update.
     errors=_verify_archive_safe(history_database)
     return "；".join(results)+("；封存驗證失敗："+"、".join(errors) if errors else "；封存驗證通過")
 
@@ -328,6 +316,64 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
         except Exception as error:
             record_status(history_database, margin_balance_source, "失敗", f"融資融券餘額更新失敗：{error}", now)
             _notify_data_update_failure(decision_database, margin_balance_source, str(error), now)
+
+    sector_source = "SECTOR 產業分類"
+    if sector_source not in completed:
+        # sector_rotation_factor_score reads securities.sector -- this used
+        # to only run inside run_all_public_daily_updates, which itself only
+        # runs when archive verification finds real corruption (vanishingly
+        # rare). Confirmed live 2026-08-07: securities.sector was 0/1983
+        # populated as a direct result -- sector_rotation had never produced
+        # a real score for any symbol. Standalone here for the same reason
+        # as MARKET_INDEX/INSTITUTIONAL_FLOW/MARGIN_BALANCE.
+        try:
+            inserted = security_catalog.upsert_sectors(history_database, security_catalog.parse_company_basic_info(security_catalog.fetch_company_basic_info()))
+            message = f"產業分類更新完成，寫入 {inserted} 筆"
+            record_status(history_database, sector_source, "成功", message, now)
+        except Exception as error:
+            record_status(history_database, sector_source, "失敗", f"產業分類更新失敗：{error}", now)
+            _notify_data_update_failure(decision_database, sector_source, str(error), now)
+
+    ex_rights_source = "EX_RIGHTS 除權息事件"
+    if ex_rights_source not in completed:
+        # events_factor_score and dividend_adjustment.adjust_bars both read
+        # ex_rights_events -- same "buried inside the rarely-true branch"
+        # bug as SECTOR above. A one-time historical backfill had already
+        # populated 16,335 rows, so this wasn't fully empty like sector/
+        # valuation/revenue, but the daily refresh (new upcoming events)
+        # had never actually run since that backfill.
+        try:
+            events = parse_ex_rights_events(fetch_ex_rights_events(now.date() - timedelta(days=30), now.date() + timedelta(days=30)))
+            inserted = store_events(history_database, events)
+            message = f"除權息事件更新完成，寫入 {inserted} 筆"
+            record_status(history_database, ex_rights_source, "成功", message, now)
+        except Exception as error:
+            record_status(history_database, ex_rights_source, "失敗", f"除權息事件更新失敗：{error}", now)
+            _notify_data_update_failure(decision_database, ex_rights_source, str(error), now)
+
+    valuation_source = "VALUATION 個股評價"
+    if valuation_source not in completed:
+        # valuation_factor_score reads valuation_snapshots -- same bug as
+        # SECTOR above: 0 rows ever, confirmed live 2026-08-07.
+        try:
+            inserted = update_valuation_snapshots(history_database)
+            message = f"個股評價更新完成，寫入 {inserted} 筆"
+            record_status(history_database, valuation_source, "成功", message, now)
+        except Exception as error:
+            record_status(history_database, valuation_source, "失敗", f"個股評價更新失敗：{error}", now)
+            _notify_data_update_failure(decision_database, valuation_source, str(error), now)
+
+    fundamentals_source = "FUNDAMENTALS 月營收"
+    if fundamentals_source not in completed:
+        # fundamentals_factor_score reads revenue_snapshots -- same bug as
+        # SECTOR above: 0 rows ever, confirmed live 2026-08-07.
+        try:
+            inserted = update_revenue_snapshots(history_database)
+            message = f"月營收更新完成，寫入 {inserted} 筆"
+            record_status(history_database, fundamentals_source, "成功", message, now)
+        except Exception as error:
+            record_status(history_database, fundamentals_source, "失敗", f"月營收更新失敗：{error}", now)
+            _notify_data_update_failure(decision_database, fundamentals_source, str(error), now)
 
     return result
 

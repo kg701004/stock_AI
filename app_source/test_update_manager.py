@@ -92,18 +92,48 @@ class UpdateManagerTests(unittest.TestCase):
         bare "except: pass" -- dividend-adjusted prices could silently go
         stale with zero visibility anywhere in the app. It must now be
         recorded as a durable notification when a decision_database is
-        available, without breaking the rest of the daily update."""
+        available, without breaking the rest of the daily update. The
+        EX_RIGHTS check moved to a standalone run_startup_check block
+        2026-08-07 (see test_startup_check_runs_sector_ex_rights_valuation_and_fundamentals_even_when_nothing_else_is_due)
+        because it used to be nested inside run_all_public_daily_updates,
+        which only runs when archive verification finds real corruption."""
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
         decision_database = Path("data/test_update_status_decision.sqlite")
         decision_database.unlink(missing_ok=True)
-        with patch("update_manager.fetch_ex_rights_events", side_effect=RuntimeError("simulated 307")):
-            summary = run_all_public_daily_updates(self.database, self.imports, self.archive, decision_database)
+        with patch("update_manager.list_statuses", return_value=[]), \
+             patch("update_manager.verify_archive", return_value=[]), \
+             patch("update_manager.run_manual_update"), \
+             patch("update_manager.fetch_twse_index", return_value=None), \
+             patch("update_manager.fetch_tpex_index", return_value=[]), \
+             patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", side_effect=RuntimeError("simulated 307")):
+            summary = run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
         self.assertIsInstance(summary, str)  # the rest of the update still completes normally
         records = list_notifications(decision_database)
-        self.assertTrue(any(r.category == "ex_rights_fetch_failed" for r in records))
+        self.assertTrue(any(r.category == "data_update_failed" and r.symbol == "EX_RIGHTS 除權息事件" for r in records))
 
     def test_ex_rights_fetch_failure_does_not_crash_when_no_decision_database_is_given(self) -> None:
-        with patch("update_manager.fetch_ex_rights_events", side_effect=RuntimeError("simulated 307")):
-            summary = run_all_public_daily_updates(self.database, self.imports, self.archive)
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
+        with patch("update_manager.list_statuses", return_value=[]), \
+             patch("update_manager.verify_archive", return_value=[]), \
+             patch("update_manager.run_manual_update"), \
+             patch("update_manager.fetch_twse_index", return_value=None), \
+             patch("update_manager.fetch_tpex_index", return_value=[]), \
+             patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", side_effect=RuntimeError("simulated 307")):
+            summary = run_startup_check(self.database, self.imports, self.archive, now)
         self.assertIsInstance(summary, str)
 
     def test_startup_check_fetches_and_stores_market_indices_even_when_nothing_else_is_due(self) -> None:
@@ -130,7 +160,11 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", return_value=[]), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0):
             run_startup_check(self.database, self.imports, self.archive, now)
         with sqlite3.connect(self.database) as connection:
             rows = connection.execute("SELECT market, close_value FROM market_index_history ORDER BY market").fetchall()
@@ -138,6 +172,44 @@ class UpdateManagerTests(unittest.TestCase):
         self.assertIn(("TWSE", 16000.0), rows)
         statuses = {item.source: item.status for item in list_statuses(self.database)}
         self.assertEqual(statuses["MARKET_INDEX 大盤櫃買指數"], "成功")
+
+    def test_startup_check_runs_sector_ex_rights_valuation_and_fundamentals_even_when_nothing_else_is_due(self) -> None:
+        """Regression test: security_catalog.upsert_sectors, the ex-rights
+        refresh, update_valuation_snapshots and update_revenue_snapshots all
+        used to only run inside run_all_public_daily_updates, which itself
+        only runs when archive verification finds real corruption
+        (vanishingly rare). Confirmed live 2026-08-07: securities.sector was
+        0/1983 populated and valuation_snapshots/revenue_snapshots were
+        completely empty as a direct result -- sector_rotation/valuation/
+        fundamentals factor scores had never produced a real value for any
+        symbol. Must be standalone (like MARKET_INDEX) so each gets a real
+        attempt on every startup regardless of the other sources' state."""
+        now = datetime(2026, 7, 22, 6, tzinfo=timezone.utc)
+        with patch("update_manager.list_statuses", return_value=[]), \
+             patch("update_manager.verify_archive", return_value=[]), \
+             patch("update_manager.run_manual_update"), \
+             patch("notification_center.check_short_term_reversal_triggers", return_value=[]), \
+             patch("notification_center.check_allocation_drift", return_value=[]), \
+             patch("update_manager.fetch_twse_index", return_value=None), \
+             patch("update_manager.fetch_tpex_index", return_value=[]), \
+             patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=7) as mock_sectors, \
+             patch("update_manager.fetch_ex_rights_events", return_value=[]) as mock_ex_rights, \
+             patch("update_manager.update_valuation_snapshots", return_value=3) as mock_valuation, \
+             patch("update_manager.update_revenue_snapshots", return_value=4) as mock_revenue:
+            run_startup_check(self.database, self.imports, self.archive, now)
+        mock_sectors.assert_called_once()
+        mock_ex_rights.assert_called_once()
+        mock_valuation.assert_called_once()
+        mock_revenue.assert_called_once()
+        statuses = {item.source: item.status for item in list_statuses(self.database)}
+        self.assertEqual(statuses["SECTOR 產業分類"], "成功")
+        self.assertEqual(statuses["EX_RIGHTS 除權息事件"], "成功")
+        self.assertEqual(statuses["VALUATION 個股評價"], "成功")
+        self.assertEqual(statuses["FUNDAMENTALS 月營收"], "成功")
 
     def test_market_index_fetch_failure_is_recorded_as_a_notification(self) -> None:
         decision_database = Path("data/test_update_status_decision_index.sqlite")
@@ -152,7 +224,11 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", return_value=[]), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0):
             summary = run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
         self.assertIsInstance(summary, str)
         records = list_notifications(decision_database)
@@ -177,7 +253,11 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", return_value=[]), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0):
             run_startup_check(self.database, self.imports, self.archive, now)
             self.assertEqual(mock_verify.call_count, 1)
             statuses = {item.source: item.status for item in list_statuses(self.database)}
@@ -202,7 +282,11 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", return_value=[]), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0):
             run_startup_check(self.database, self.imports, self.archive, now)
             statuses = {item.source: item.status for item in list_statuses(self.database)}
             self.assertEqual(statuses["ARCHIVE 封存完整性驗證"], "失敗")
@@ -234,6 +318,10 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
              patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", return_value=[]), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0), \
              patch("notification_center.check_short_term_reversal_triggers", return_value=["msg1"]) as mock_reversal, \
              patch("notification_center.check_allocation_drift", return_value=["msg2"]) as mock_drift:
 
@@ -262,6 +350,10 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
              patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", return_value=[]), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0), \
              patch("notification_center.check_short_term_reversal_triggers", side_effect=ValueError("simulated reversal failure")) as mock_reversal, \
              patch("notification_center.check_allocation_drift", return_value=["msg2"]) as mock_drift:
 
@@ -302,7 +394,11 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", return_value=[]), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0):
             # Must not raise.
             result = run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
         self.assertIsInstance(result, str)
@@ -332,7 +428,11 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", return_value=[]), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0):
             run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
         records = list_notifications(decision_database)
         self.assertTrue(any(r.category == "data_update_failed" and r.symbol == "REVERSAL 短期反彈檢查" for r in records))
@@ -353,6 +453,10 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
              patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
+             patch("security_catalog.upsert_sectors", return_value=0), \
+             patch("update_manager.fetch_ex_rights_events", return_value=[]), \
+             patch("update_manager.update_valuation_snapshots", return_value=0), \
+             patch("update_manager.update_revenue_snapshots", return_value=0), \
              patch("transaction_ledger.calculate_holdings", side_effect=RuntimeError("simulated ledger read failure")):
             run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
         records = list_notifications(decision_database)
