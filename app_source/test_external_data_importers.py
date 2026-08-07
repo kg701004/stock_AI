@@ -247,10 +247,14 @@ class ExternalImporterTests(unittest.TestCase):
         """Column layout confirmed live against the real MI_MARGN response's
         own "fields" array: 融資 occupies indices 0-7, 融券 occupies 8-13 --
         the 買進/賣出/前日餘額/今日餘額 labels repeat for each side, so
-        position (not the label text) is what disambiguates them."""
+        position (not the label text) is what disambiguates them.
+
+        MI_MARGN reports balances in 張 (1,000-share lots, confirmed live
+        against Yahoo股市 2026-08-07); the parser scales to real shares to
+        stay unit-consistent with daily_bars.volume."""
         row = ["2330", "台積電", "0", "0", "0", "30000", "28461", "0", "0", "0", "0", "62", "77", "0", "", " "]
         parsed = parse_twse_margin_balance_report(date(2026, 8, 5), [row])
-        self.assertEqual(parsed, [MarginBalance(date(2026, 8, 5), "2330", 28461 - 30000, 77 - 62)])
+        self.assertEqual(parsed, [MarginBalance(date(2026, 8, 5), "2330", (28461 - 30000) * 1000, (77 - 62) * 1000)])
 
     def test_parse_twse_margin_balance_report_skips_malformed_rows(self):
         raw = [
@@ -293,7 +297,7 @@ class ExternalImporterTests(unittest.TestCase):
             "ShortSaleBalance": "667",
         }
         parsed = parse_tpex_margin_balance_report([row])
-        self.assertEqual(parsed, [MarginBalance(date(2026, 8, 6), "6182", 56281 - 57150, 667 - 791)])
+        self.assertEqual(parsed, [MarginBalance(date(2026, 8, 6), "6182", (56281 - 57150) * 1000, (667 - 791) * 1000)])
 
     def test_parse_tpex_margin_balance_report_skips_malformed_rows(self):
         raw = [

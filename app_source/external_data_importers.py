@@ -528,7 +528,19 @@ def parse_twse_margin_balance_report(trading_date: date, records: list[list[obje
     them here, unlike most of this codebase's other dict-keyed parsers).
     The net day-over-day balance change (today - previous day) is the
     cleanest single "net new leveraged position" number, and is exactly what
-    the endpoint's own 今日餘額/前日餘額 pair already gives directly."""
+    the endpoint's own 今日餘額/前日餘額 pair already gives directly.
+
+    Unit note (caught via reverse-verification against Yahoo股市 2026-08-07):
+    MI_MARGN reports 融資/融券餘額 in 張 (1,000-share trading lots), matching
+    table 0's own "融資(交易單位)" label and confirmed by magnitude (2330's
+    own displayed balance, ~30,000, is only plausible as 張 -- as raw shares
+    it would be a trivial ~NT$70M of margin financing for the most heavily
+    traded stock on the exchange). daily_bars.volume and
+    institutional_flow_history are both in real shares, so this is scaled
+    by 1,000 here to stay unit-consistent with them -- otherwise
+    retail_leverage_factor_score's ratio-against-volume calculation is
+    silently off by 1,000x and the score never moves off neutral."""
+    LOT_SIZE = 1000
     parsed: list[MarginBalance] = []
     for row in records:
         if not isinstance(row, list) or len(row) < 14:
@@ -542,7 +554,7 @@ def parse_twse_margin_balance_report(trading_date: date, records: list[list[obje
         short_today = _optional_int(row[12])
         if None in (margin_previous, margin_today, short_previous, short_today):
             continue
-        parsed.append(MarginBalance(trading_date, symbol, margin_today - margin_previous, short_today - short_previous))
+        parsed.append(MarginBalance(trading_date, symbol, (margin_today - margin_previous) * LOT_SIZE, (short_today - short_previous) * LOT_SIZE))
     return parsed
 
 
@@ -568,7 +580,14 @@ def fetch_tpex_margin_balance_report(timeout: int = 20) -> list[dict[str, object
 
 
 def parse_tpex_margin_balance_report(records: list[dict[str, object]]) -> list[MarginBalance]:
-    """Convert raw tpex_mainboard_margin_balance rows into MarginBalance records."""
+    """Convert raw tpex_mainboard_margin_balance rows into MarginBalance records.
+
+    Same 張 (1,000-share lot) unit as TWSE's MI_MARGN -- confirmed live
+    2026-08-07 against Yahoo股市 (6182's displayed 融資餘額 56,281 matches
+    this endpoint's raw MarginPurchaseBalance exactly, and Yahoo labels that
+    column in 張). Scaled to real shares here for the same reason as
+    parse_twse_margin_balance_report."""
+    LOT_SIZE = 1000
     parsed: list[MarginBalance] = []
     for row in records:
         if not isinstance(row, dict):
@@ -587,7 +606,7 @@ def parse_tpex_margin_balance_report(records: list[dict[str, object]]) -> list[M
         short_today = _optional_int(row.get("ShortSaleBalance"))
         if None in (margin_previous, margin_today, short_previous, short_today):
             continue
-        parsed.append(MarginBalance(trading_date, symbol, margin_today - margin_previous, short_today - short_previous))
+        parsed.append(MarginBalance(trading_date, symbol, (margin_today - margin_previous) * LOT_SIZE, (short_today - short_previous) * LOT_SIZE))
     return parsed
 
 
