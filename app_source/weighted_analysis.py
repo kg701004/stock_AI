@@ -19,7 +19,7 @@ from database_utils import database_connection
 FACTOR_NAMES = (
     "technical", "market_breadth", "sector_rotation", "fundamentals",
     "institutional_flow", "derivatives", "global_risk", "sentiment", "events",
-    "liquidity", "valuation",
+    "liquidity", "valuation", "retail_leverage",
 )
 
 

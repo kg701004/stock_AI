@@ -1,3 +1,3 @@
-symbol,as_of,technical,market_breadth,sector_rotation,fundamentals,institutional_flow,derivatives,global_risk,sentiment,events,liquidity,valuation,risk_score,note_technical,note_fundamentals,note_global_risk,note_sentiment
-2330,2026-07-22T13:30:00+08:00,76,68,72,81,62,48,43,58,65,90,55,32,價格與均線結構偏多,營收與獲利品質穩健,海外風險仍需留意,市場情緒溫和偏多
-2317,2026-07-22T13:30:00+08:00,61,62,58,70,55,50,45,54,55,88,63,38,技術面中性偏多,基本面分數來自盤後財報資料,海外市場未出現重大壓力,市場情緒中性
+symbol,as_of,technical,market_breadth,sector_rotation,fundamentals,institutional_flow,derivatives,global_risk,sentiment,events,liquidity,valuation,retail_leverage,risk_score,note_technical,note_fundamentals,note_global_risk,note_sentiment
+2330,2026-07-22T13:30:00+08:00,76,68,72,81,62,48,43,58,65,90,55,50,32,價格與均線結構偏多,營收與獲利品質穩健,海外風險仍需留意,市場情緒溫和偏多
+2317,2026-07-22T13:30:00+08:00,61,62,58,70,55,50,45,54,55,88,63,50,38,技術面中性偏多,基本面分數來自盤後財報資料,海外市場未出現重大壓力,市場情緒中性

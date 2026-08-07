@@ -128,7 +128,9 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_index", return_value=16000.0), \
              patch("update_manager.fetch_tpex_index", return_value=[(date(2026, 8, 4), 200.0)]), \
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]):
+             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
             run_startup_check(self.database, self.imports, self.archive, now)
         with sqlite3.connect(self.database) as connection:
             rows = connection.execute("SELECT market, close_value FROM market_index_history ORDER BY market").fetchall()
@@ -148,7 +150,9 @@ class UpdateManagerTests(unittest.TestCase):
              patch("notification_center.check_allocation_drift", return_value=[]), \
              patch("update_manager.fetch_twse_index", side_effect=RuntimeError("simulated outage")), \
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]):
+             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
             summary = run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
         self.assertIsInstance(summary, str)
         records = list_notifications(decision_database)
@@ -171,7 +175,9 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_index", return_value=None), \
              patch("update_manager.fetch_tpex_index", return_value=[]), \
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]):
+             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
             run_startup_check(self.database, self.imports, self.archive, now)
             self.assertEqual(mock_verify.call_count, 1)
             statuses = {item.source: item.status for item in list_statuses(self.database)}
@@ -194,7 +200,9 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_index", return_value=None), \
              patch("update_manager.fetch_tpex_index", return_value=[]), \
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]):
+             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
             run_startup_check(self.database, self.imports, self.archive, now)
             statuses = {item.source: item.status for item in list_statuses(self.database)}
             self.assertEqual(statuses["ARCHIVE 封存完整性驗證"], "失敗")
@@ -224,6 +232,8 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_tpex_index", return_value=[]), \
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
              patch("notification_center.check_short_term_reversal_triggers", return_value=["msg1"]) as mock_reversal, \
              patch("notification_center.check_allocation_drift", return_value=["msg2"]) as mock_drift:
 
@@ -250,6 +260,8 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_tpex_index", return_value=[]), \
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
              patch("notification_center.check_short_term_reversal_triggers", side_effect=ValueError("simulated reversal failure")) as mock_reversal, \
              patch("notification_center.check_allocation_drift", return_value=["msg2"]) as mock_drift:
 
@@ -288,7 +300,9 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_index", return_value=None), \
              patch("update_manager.fetch_tpex_index", return_value=[]), \
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]):
+             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
             # Must not raise.
             result = run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
         self.assertIsInstance(result, str)
@@ -316,7 +330,9 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_twse_index", return_value=None), \
              patch("update_manager.fetch_tpex_index", return_value=[]), \
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
-             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]):
+             patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]):
             run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
         records = list_notifications(decision_database)
         self.assertTrue(any(r.category == "data_update_failed" and r.symbol == "REVERSAL 短期反彈檢查" for r in records))
@@ -335,6 +351,8 @@ class UpdateManagerTests(unittest.TestCase):
              patch("update_manager.fetch_tpex_index", return_value=[]), \
              patch("update_manager.fetch_twse_institutional_flow_report", return_value=[]), \
              patch("update_manager.fetch_tpex_institutional_flow_report", return_value=[]), \
+             patch("update_manager.fetch_twse_margin_balance_report", return_value=[]), \
+             patch("update_manager.fetch_tpex_margin_balance_report", return_value=[]), \
              patch("transaction_ledger.calculate_holdings", side_effect=RuntimeError("simulated ledger read failure")):
             run_startup_check(self.database, self.imports, self.archive, now, decision_database=decision_database)
         records = list_notifications(decision_database)

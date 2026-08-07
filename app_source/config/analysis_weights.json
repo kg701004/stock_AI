@@ -11,7 +11,8 @@
     "sentiment": 7,
     "events": 5,
     "liquidity": 5,
-    "valuation": 5
+    "valuation": 5,
+    "retail_leverage": 5
   },
   "thresholds": {
     "strong_watch": 75,

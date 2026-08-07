@@ -4,7 +4,7 @@ import unittest
 import unittest.mock
 from datetime import date
 from pathlib import Path
-from external_data_importers import MopsFinancial, TaifexDaily, fetch_taifex_daily_report, import_mops, import_taifex, import_vix, parse_fred_vix_csv, parse_mops_csv, parse_mops_xbrl, parse_taifex_daily_report, InstitutionalFlow, fetch_twse_institutional_flow_report, parse_twse_institutional_flow_report, fetch_tpex_institutional_flow_report, parse_tpex_institutional_flow_report, import_institutional_flow
+from external_data_importers import MopsFinancial, TaifexDaily, fetch_taifex_daily_report, import_mops, import_taifex, import_vix, parse_fred_vix_csv, parse_mops_csv, parse_mops_xbrl, parse_taifex_daily_report, InstitutionalFlow, fetch_twse_institutional_flow_report, parse_twse_institutional_flow_report, fetch_tpex_institutional_flow_report, parse_tpex_institutional_flow_report, import_institutional_flow, MarginBalance, fetch_twse_margin_balance_report, parse_twse_margin_balance_report, fetch_tpex_margin_balance_report, parse_tpex_margin_balance_report, import_margin_balance
 
 class ExternalImporterTests(unittest.TestCase):
     def setUp(self): self.db = Path("data/test_external.sqlite")
@@ -241,4 +241,88 @@ class ExternalImporterTests(unittest.TestCase):
         self.assertEqual(rows, [
             ("2026-08-05", "2330", 1234, -500, 100, 834),
             ("2026-08-05", "6182", 1000, -200, 50, 850),
+        ])
+
+    def test_parse_twse_margin_balance_report_extracts_correct_columns(self):
+        """Column layout confirmed live against the real MI_MARGN response's
+        own "fields" array: 融資 occupies indices 0-7, 融券 occupies 8-13 --
+        the 買進/賣出/前日餘額/今日餘額 labels repeat for each side, so
+        position (not the label text) is what disambiguates them."""
+        row = ["2330", "台積電", "0", "0", "0", "30000", "28461", "0", "0", "0", "0", "62", "77", "0", "", " "]
+        parsed = parse_twse_margin_balance_report(date(2026, 8, 5), [row])
+        self.assertEqual(parsed, [MarginBalance(date(2026, 8, 5), "2330", 28461 - 30000, 77 - 62)])
+
+    def test_parse_twse_margin_balance_report_skips_malformed_rows(self):
+        raw = [
+            ["00", "ETF"] + ["0"] * 14,  # 2-digit symbol, not a stock
+            ["2330", "台積電", "0", "0", "0", "not-a-number", "0"] + ["0"] * 9,  # unparseable numeric field
+            ["2330", "台積電"],  # too short (< 16 columns)
+            "not a list",
+        ]
+        self.assertEqual(parse_twse_margin_balance_report(date(2026, 8, 5), raw), [])
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_fetch_twse_margin_balance_report_returns_the_detail_table_rows(self, mock_urlopen):
+        mock_response = unittest.mock.MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "stat": "OK", "date": "20260805",
+            "tables": [
+                {"data": [["融資(交易單位)", "0", "0", "0", "0", "0"]]},
+                {"data": [["2330", "台積電", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", " "]]},
+            ],
+        }).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        records = fetch_twse_margin_balance_report(date(2026, 8, 5))
+        self.assertEqual(records, [["2330", "台積電", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", " "]])
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_fetch_twse_margin_balance_report_non_trading_day_returns_empty(self, mock_urlopen):
+        mock_response = unittest.mock.MagicMock()
+        mock_response.read.return_value = b'{"stat": "\xe6\xb2\x92\xe6\x9c\x89\xe8\xb3\x87\xe6\x96\x99"}'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        records = fetch_twse_margin_balance_report(date(2026, 8, 5))
+        self.assertEqual(records, [])
+
+    def test_parse_tpex_margin_balance_report_extracts_correct_fields(self):
+        row = {
+            "SecuritiesCompanyCode": "6182",
+            "Date": "1150806",
+            "MarginPurchaseBalancePreviousDay": "57150",
+            "MarginPurchaseBalance": "56281",
+            "ShortSaleBalancePreviousDay": "791",
+            "ShortSaleBalance": "667",
+        }
+        parsed = parse_tpex_margin_balance_report([row])
+        self.assertEqual(parsed, [MarginBalance(date(2026, 8, 6), "6182", 56281 - 57150, 667 - 791)])
+
+    def test_parse_tpex_margin_balance_report_skips_malformed_rows(self):
+        raw = [
+            {"SecuritiesCompanyCode": "00", "Date": "1150806"},  # not a 4-digit stock symbol
+            {"SecuritiesCompanyCode": "6182", "Date": "not-a-date"},  # unparseable date
+            {"SecuritiesCompanyCode": "6182", "Date": "1150806"},  # missing all the numeric fields
+            "not a dict",
+        ]
+        self.assertEqual(parse_tpex_margin_balance_report(raw), [])
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_fetch_tpex_margin_balance_report_returns_the_raw_json_list(self, mock_urlopen):
+        mock_response = unittest.mock.MagicMock()
+        mock_response.read.return_value = b'[{"SecuritiesCompanyCode": "6182"}]'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        records = fetch_tpex_margin_balance_report()
+        self.assertEqual(records, [{"SecuritiesCompanyCode": "6182"}])
+
+    def test_import_margin_balance(self):
+        records = [
+            MarginBalance(date(2026, 8, 5), "2330", -1539, 15),
+            MarginBalance(date(2026, 8, 6), "6182", -869, -124),
+        ]
+        self.assertEqual(import_margin_balance(self.db, records), 2)
+        with sqlite3.connect(self.db) as conn:
+            rows = conn.execute(
+                "SELECT trading_date, symbol, margin_net_change_shares, short_net_change_shares FROM margin_balance_history ORDER BY symbol"
+            ).fetchall()
+        self.assertEqual(rows, [
+            ("2026-08-05", "2330", -1539, 15),
+            ("2026-08-06", "6182", -869, -124),
         ])

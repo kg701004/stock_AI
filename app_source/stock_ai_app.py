@@ -44,7 +44,7 @@ from notification_center import check_watchlist_triggers, list_notifications, re
 from weighted_analysis import assess_stock, load_weight_config
 from judgement_weights import load as load_judgement_weights, save as save_judgement_weights
 
-FACTOR_LABELS = {"technical":"技術面","market_breadth":"市場廣度","sector_rotation":"產業輪動","fundamentals":"基本面","institutional_flow":"法人動向","derivatives":"衍生性商品","global_risk":"全球風險","sentiment":"情緒指標","events":"事件風險","liquidity":"流動性","valuation":"評價"}
+FACTOR_LABELS = {"technical":"技術面","market_breadth":"市場廣度","sector_rotation":"產業輪動","fundamentals":"基本面","institutional_flow":"法人動向","derivatives":"衍生性商品","global_risk":"全球風險","sentiment":"情緒指標","events":"事件風險","liquidity":"流動性","valuation":"評價","retail_leverage":"散戶槓桿"}
 
 class JudgementWeightFrame(ttk.Frame):
     """Editable 1..10 weights used by every factor-score assessment."""

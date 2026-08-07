@@ -30,6 +30,8 @@ class MopsFinancial: symbol: str; fiscal_year: int; fiscal_quarter: int; revenue
 class TaifexDaily: trading_date: date; contract: str; session: str; open_price: float | None; high_price: float | None; low_price: float | None; close_price: float | None; volume: int | None; open_interest: int | None
 @dataclass(frozen=True, slots=True)
 class InstitutionalFlow: trading_date: date; symbol: str; foreign_net_shares: int; trust_net_shares: int; dealer_net_shares: int; total_net_shares: int
+@dataclass(frozen=True, slots=True)
+class MarginBalance: trading_date: date; symbol: str; margin_net_change_shares: int; short_net_change_shares: int
 
 def initialize(database: Path) -> None:
     with database_connection(database) as c:
@@ -51,6 +53,14 @@ def initialize(database: Path) -> None:
             trust_net_shares INTEGER NOT NULL,
             dealer_net_shares INTEGER NOT NULL,
             total_net_shares INTEGER NOT NULL,
+            imported_at TEXT NOT NULL,
+            PRIMARY KEY(trading_date, symbol)
+        );
+        CREATE TABLE IF NOT EXISTS margin_balance_history (
+            trading_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            margin_net_change_shares INTEGER NOT NULL,
+            short_net_change_shares INTEGER NOT NULL,
             imported_at TEXT NOT NULL,
             PRIMARY KEY(trading_date, symbol)
         );
@@ -464,5 +474,129 @@ def import_market_indices(database: Path, records: list[tuple[date, str, float]]
         c.executemany(
             "INSERT OR REPLACE INTO market_index_history (trading_date, market, close_value, imported_at) VALUES (?, ?, ?, ?)",
             [(x[0].isoformat(), x[1], x[2], now) for x in records]
+        )
+    return len(records)
+
+
+TWSE_MARGIN_BALANCE_URL = "https://www.twse.com.tw/exchangeReport/MI_MARGN"
+
+
+def fetch_twse_margin_balance_report(trading_date: date, timeout: int = 20) -> list[list[object]]:
+    """Fetch TWSE's daily 融資融券餘額 (margin purchase / short sale balance)
+    report for one date -- every listed security.
+
+    Live-verified 2026-08-07: the legacy `MI_MARGN` endpoint (not the
+    openapi.twse.com.tw flavor, which lacks any date field at all -- exactly
+    the kind of silent-mislabeling risk that bit fetch_twse_index /
+    STOCK_DAY_ALL earlier this session) echoes back the requested date in
+    its own top-level "date" field, so the caller-supplied trading_date can
+    be trusted the same way T86's institutional-flow endpoint already is.
+
+    Returns the raw per-stock rows from table index 1 ("融資融券彙總
+    (全部)") exactly as TWSE returns them -- parse_twse_margin_balance_report
+    does the conversion, using the official "fields" array (confirmed live)
+    to fix column positions rather than guessing.
+
+    Raises: urllib.error.URLError, json.JSONDecodeError, etc. on network/parsing failure.
+    """
+    url = f"{TWSE_MARGIN_BALANCE_URL}?response=json&date={trading_date.strftime('%Y%m%d')}&selectType=ALL"
+    request = urllib.request.Request(url, headers={"User-Agent": "StockAI-local-research/1.0"})
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict) or payload.get("stat") != "OK":
+        return []
+    tables = payload.get("tables")
+    if not isinstance(tables, list) or len(tables) < 2:
+        return []
+    detail_table = tables[1]
+    if not isinstance(detail_table, dict):
+        return []
+    data = detail_table.get("data")
+    return data if isinstance(data, list) else []
+
+
+def parse_twse_margin_balance_report(trading_date: date, records: list[list[object]]) -> list[MarginBalance]:
+    """Convert raw MI_MARGN per-stock rows into MarginBalance records.
+
+    Column layout confirmed live against the real response's own "fields"
+    array: ['代號','名稱','買進','賣出','現金償還','前日餘額','今日餘額',
+    '次一營業日限額','買進','賣出','現券償還','前日餘額','今日餘額',
+    '次一營業日限額','資券互抵','註記'] -- 融資 occupies indices 0-7 and
+    融券 occupies 8-13 (the '買進'/'賣出'/'前日餘額'/'今日餘額' labels repeat
+    for each side, so position -- not the label text -- is what disambiguates
+    them here, unlike most of this codebase's other dict-keyed parsers).
+    The net day-over-day balance change (today - previous day) is the
+    cleanest single "net new leveraged position" number, and is exactly what
+    the endpoint's own 今日餘額/前日餘額 pair already gives directly."""
+    parsed: list[MarginBalance] = []
+    for row in records:
+        if not isinstance(row, list) or len(row) < 14:
+            continue
+        symbol = str(row[0]).strip()
+        if not symbol.isdigit() or len(symbol) != 4:
+            continue
+        margin_previous = _optional_int(row[5])
+        margin_today = _optional_int(row[6])
+        short_previous = _optional_int(row[11])
+        short_today = _optional_int(row[12])
+        if None in (margin_previous, margin_today, short_previous, short_today):
+            continue
+        parsed.append(MarginBalance(trading_date, symbol, margin_today - margin_previous, short_today - short_previous))
+    return parsed
+
+
+TPEX_MARGIN_BALANCE_URL = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_margin_balance"
+
+
+def fetch_tpex_margin_balance_report(timeout: int = 20) -> list[dict[str, object]]:
+    """Fetch TPEx's (上櫃) daily margin purchase / short sale balance report.
+
+    Live-verified 2026-08-07: real, free, working, with clean unambiguous
+    English JSON keys (unlike several other TPEx openapi endpoints already
+    used in this codebase) and its own "Date" field per record -- like
+    TPEx's other daily snapshot endpoints, only the latest available day is
+    returned, no date query parameter.
+
+    Raises: urllib.error.URLError, json.JSONDecodeError, etc. on network/parsing failure.
+    """
+    request = urllib.request.Request(TPEX_MARGIN_BALANCE_URL, headers={"User-Agent": "StockAI-local-research/1.0"})
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload if isinstance(payload, list) else []
+
+
+def parse_tpex_margin_balance_report(records: list[dict[str, object]]) -> list[MarginBalance]:
+    """Convert raw tpex_mainboard_margin_balance rows into MarginBalance records."""
+    parsed: list[MarginBalance] = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("SecuritiesCompanyCode", "")).strip()
+        if not symbol.isdigit() or len(symbol) != 4:
+            continue
+        date_str = str(row.get("Date", "")).strip()
+        try:
+            trading_date = _parse_roc_date(date_str)
+        except (ValueError, IndexError):
+            continue
+        margin_previous = _optional_int(row.get("MarginPurchaseBalancePreviousDay"))
+        margin_today = _optional_int(row.get("MarginPurchaseBalance"))
+        short_previous = _optional_int(row.get("ShortSaleBalancePreviousDay"))
+        short_today = _optional_int(row.get("ShortSaleBalance"))
+        if None in (margin_previous, margin_today, short_previous, short_today):
+            continue
+        parsed.append(MarginBalance(trading_date, symbol, margin_today - margin_previous, short_today - short_previous))
+    return parsed
+
+
+def import_margin_balance(database: Path, records: list[MarginBalance]) -> int:
+    initialize(database)
+    now = datetime.now().astimezone().isoformat()
+    with database_connection(database) as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO margin_balance_history VALUES (?, ?, ?, ?, ?)",
+            [(x.trading_date.isoformat(), x.symbol, x.margin_net_change_shares, x.short_net_change_shares, now) for x in records],
         )
     return len(records)

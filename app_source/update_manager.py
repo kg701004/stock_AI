@@ -12,7 +12,7 @@ from historical_storage import archive_and_import
 from historical_storage import verify_archive
 from tpex_daily_importer import fetch_current_daily_json as fetch_tpex, parse_daily_records as parse_tpex, extract_security_names as extract_tpex_names
 from twse_daily_importer import fetch_current_daily_json as fetch_twse, parse_daily_records as parse_twse, write_normalized_csv, extract_security_names as extract_twse_names
-from external_data_importers import fetch_fred_vix_csv, fetch_taifex_daily_report, fetch_tpex_index, fetch_tpex_institutional_flow_report, fetch_twse_index, fetch_twse_institutional_flow_report, import_institutional_flow, import_market_indices, import_taifex, import_vix, parse_fred_vix_csv, parse_taifex_daily_report, parse_tpex_institutional_flow_report, parse_twse_institutional_flow_report
+from external_data_importers import fetch_fred_vix_csv, fetch_taifex_daily_report, fetch_tpex_index, fetch_tpex_institutional_flow_report, fetch_tpex_margin_balance_report, fetch_twse_index, fetch_twse_institutional_flow_report, fetch_twse_margin_balance_report, import_institutional_flow, import_margin_balance, import_market_indices, import_taifex, import_vix, parse_fred_vix_csv, parse_taifex_daily_report, parse_tpex_institutional_flow_report, parse_tpex_margin_balance_report, parse_twse_institutional_flow_report, parse_twse_margin_balance_report
 import security_catalog
 from dividend_adjustment import fetch_ex_rights_events, parse_ex_rights_events, store_events
 from fundamentals_data import update_revenue_snapshots
@@ -29,6 +29,7 @@ SCHEDULES = {
     "DRIFT 配置偏離檢查": "開機時自動執行，每日至多一次",
     "MARKET_INDEX 大盤櫃買指數": "開機時自動執行，每日至多一次",
     "INSTITUTIONAL_FLOW 三大法人買賣超": "開機時自動執行，每日至多一次",
+    "MARGIN_BALANCE 融資融券餘額": "開機時自動執行，每日至多一次",
     "ARCHIVE 封存完整性驗證": "開機時自動執行，每日至多一次",
 }
 
@@ -309,6 +310,24 @@ def run_startup_check(history_database: Path, imports_directory: Path, archive_d
         except Exception as error:
             record_status(history_database, institutional_flow_source, "失敗", f"三大法人買賣超更新失敗：{error}", now)
             _notify_data_update_failure(decision_database, institutional_flow_source, str(error), now)
+
+    margin_balance_source = "MARGIN_BALANCE 融資融券餘額"
+    if margin_balance_source not in completed:
+        # retail_leverage_factor_score reads margin_balance_history --
+        # standalone here for the same reason INSTITUTIONAL_FLOW/MARKET_INDEX
+        # are standalone: guarantees one real attempt per day regardless of
+        # whether TWSE/TPEx/VIX have anything due. TWSE's legacy MI_MARGN
+        # covers 上市 symbols, TPEx's tpex_mainboard_margin_balance covers
+        # 上櫃 symbols -- together they're the full market.
+        try:
+            twse_records = parse_twse_margin_balance_report(now.date(), fetch_twse_margin_balance_report(now.date()))
+            tpex_records = parse_tpex_margin_balance_report(fetch_tpex_margin_balance_report())
+            inserted = import_margin_balance(history_database, twse_records + tpex_records)
+            message = f"融資融券餘額更新完成，寫入 {inserted} 筆"
+            record_status(history_database, margin_balance_source, "成功", message, now)
+        except Exception as error:
+            record_status(history_database, margin_balance_source, "失敗", f"融資融券餘額更新失敗：{error}", now)
+            _notify_data_update_failure(decision_database, margin_balance_source, str(error), now)
 
     return result
 

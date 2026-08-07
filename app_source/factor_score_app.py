@@ -14,6 +14,7 @@ import ui_theme
 from dividend_adjustment import events_factor_score
 from factor_score_store import MANUAL_FACTOR_NAMES, SEEDED_NOTE_KEY, load_symbol_factor_scores, save_factor_scores
 from institutional_flow import institutional_flow_factor_score
+from retail_leverage import retail_leverage_factor_score
 from sentiment_fear import global_risk_factor_score
 from fundamentals_data import fundamentals_factor_score
 from market_breadth import market_breadth_factor_score, sector_rotation_factor_score
@@ -28,6 +29,7 @@ MANUAL_FACTOR_LABELS = {
     "market_breadth": "市場廣度", "sector_rotation": "產業輪動", "fundamentals": "基本面",
     "institutional_flow": "法人動向", "derivatives": "衍生性商品", "global_risk": "全球風險",
     "sentiment": "情緒指標", "events": "事件風險", "liquidity": "流動性", "valuation": "評價",
+    "retail_leverage": "散戶槓桿",
 }
 FACTOR_LABELS = {**MANUAL_FACTOR_LABELS, "technical": "技術面"}
 
@@ -36,7 +38,9 @@ FACTOR_LABELS = {**MANUAL_FACTOR_LABELS, "technical": "技術面"}
 # was last saved (derivatives remains genuinely manual: no verified free
 # data source. institutional_flow moved out of that bucket 2026-08-06 --
 # TWSE's T86 and TPEx's tpex_3insti_daily_trading reports are both real,
-# free and working; see institutional_flow.py for the scoring methodology).
+# free and working; see institutional_flow.py for the scoring methodology.
+# retail_leverage added 2026-08-07 from TWSE's MI_MARGN and TPEx's
+# tpex_mainboard_margin_balance 融資融券 reports; see retail_leverage.py).
 # Each entry is a callable taking (history_database, symbol) and returning
 # (score, note); market-wide ones (market_breadth, sentiment) ignore symbol.
 AUTO_SUGGESTED_FACTOR_SCORERS = {
@@ -49,6 +53,7 @@ AUTO_SUGGESTED_FACTOR_SCORERS = {
     "events": lambda database, symbol: events_factor_score(database, symbol),
     "sentiment": lambda database, symbol: market_context_factor_score(database),
     "institutional_flow": institutional_flow_factor_score,
+    "retail_leverage": retail_leverage_factor_score,
 }
 
 

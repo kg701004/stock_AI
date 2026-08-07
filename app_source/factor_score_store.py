@@ -37,6 +37,17 @@ def ensure_schema(connection) -> None:
             PRIMARY KEY (symbol, as_of)
         )
     """)
+    # Migrate a table created before a new factor was added to
+    # MANUAL_FACTOR_NAMES -- CREATE TABLE IF NOT EXISTS alone does nothing
+    # for an already-existing table with a smaller column set (confirmed via
+    # a real crash: retail_leverage added 2026-08-07, an existing
+    # decision_audit.sqlite still had the old factor set and every read
+    # raised "no such column: retail_leverage"). Backfill existing rows with
+    # the same neutral default a fresh unscored row would get.
+    existing_columns = {row[1] for row in connection.execute("PRAGMA table_info(factor_scores)")}
+    for name in MANUAL_FACTOR_NAMES:
+        if name not in existing_columns:
+            connection.execute(f"ALTER TABLE factor_scores ADD COLUMN {name} REAL NOT NULL DEFAULT {DEFAULT_MANUAL_FACTOR_SCORE}")
 
 
 def save_factor_scores(
@@ -77,6 +88,7 @@ def seed_default_factor_scores(decision_database: Path, history_database: Path, 
         return False
     from dividend_adjustment import events_factor_score
     from institutional_flow import institutional_flow_factor_score
+    from retail_leverage import retail_leverage_factor_score
     from sentiment_fear import global_risk_factor_score
     from fundamentals_data import fundamentals_factor_score
     from market_breadth import market_breadth_factor_score, sector_rotation_factor_score
@@ -93,6 +105,7 @@ def seed_default_factor_scores(decision_database: Path, history_database: Path, 
         "events": events_factor_score(history_database, symbol, as_of.date()),
         "sentiment": market_context_factor_score(history_database),
         "institutional_flow": institutional_flow_factor_score(history_database, symbol),
+        "retail_leverage": retail_leverage_factor_score(history_database, symbol),
     }.items():
         if score is not None:
             factors[name] = score
